@@ -138,6 +138,15 @@ describe('Vercel Google OIDC auth boundary', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
+  it('returns a JSON 401 from the session endpoint when no session cookie exists', async () => {
+    configure()
+    const res = responseMock()
+    await authHandler(request('GET', '/api/auth/session'), res.response)
+    expect(res.status()).toBe(401)
+    expect(res.headers['content-type']).toBe('application/json; charset=utf-8')
+    expect(JSON.parse(res.body() ?? '')).toEqual({ error: 'unauthorized' })
+  })
+
   it('exchanges and cryptographically verifies OIDC tokens, then issues an allowlisted role session', async () => {
     configure()
     const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 })
