@@ -136,7 +136,7 @@ Set the corresponding exact origin (without a path) in `DASHBOARD_AUTH_URL`. Goo
 
 The flow validates OAuth state, nonce, PKCE, Google token signature and claims, verified email, and the allowlist. The server issues an eight-hour signed `HttpOnly`, `Secure`, `SameSite=Lax` host-only cookie. Logout is same-origin POST. Sessions are stateless; removing a user blocks their next API request, while individual session revocation is unavailable until expiry unless the signing secret is rotated. Login rate limiting is not implemented in the app; configure hosting-edge protection before broad public access.
 
-Troubleshooting: a callback mismatch means the Google redirect URI and `DASHBOARD_AUTH_URL` do not exactly match the deployed origin. `401` means no valid session; `403` means the Google account is not allowlisted or lacks access. Missing auth settings fail closed with `503 authentication_unavailable`.
+Troubleshooting: a callback mismatch means the Google redirect URI and `DASHBOARD_AUTH_URL` do not exactly match the deployed origin. `401` means no valid session; `403` means the Google account is not allowlisted or lacks access. Missing or invalid auth settings fail closed with `503 authentication_unavailable`. The function logs only invalid setting names, never values.
 
 ## Dashboard API
 
@@ -231,7 +231,7 @@ See the CI workflow at `.github/workflows/`. These commands must pass in the tar
 
 ## Troubleshooting
 
-- **Missing env / `authentication_unavailable`:** confirm the auth variables are set in the correct Vercel environment and redeploy.
+- **`503 authentication_unavailable`:** the auth function ran but rejected its configuration before checking the session. In Vercel Runtime Logs, find `[dashboard-auth] Invalid server configuration`; it lists invalid variable names only. Check `DASHBOARD_AUTH_URL` (exact HTTPS origin, no path or trailing slash), `DASHBOARD_SESSION_SECRET` (at least 32 bytes), `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and `DASHBOARD_ALLOWED_USERS` (nonempty JSON email-to-role map). Configure each in every environment where login is enabled. Vercel Preview and Production variables are separate: a value set only for Production is unavailable to Preview deployments. Redeploy the affected environment after changing settings. Do not put server-only values in `VITE_` variables.
 - **Google callback mismatch:** use the exact `https://<origin>/api/auth/callback` URL in Google and the matching origin in `DASHBOARD_AUTH_URL`.
 - **`401`:** sign in again; the session may be absent, expired or invalid.
 - **`403`:** check the normalized email and role in `DASHBOARD_ALLOWED_USERS`.

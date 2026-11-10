@@ -45,6 +45,23 @@ node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('b
 
 Do not add any of these server-only values with a `VITE_` prefix. Never configure Zoho OAuth tokens, database credentials or G03 credentials here; the dashboard gateway does not use them. `VITE_AUTH_MODE` is local development-only and should not be configured in Vercel.
 
+## Diagnosing `503 authentication_unavailable`
+
+This response is emitted by the auth handler when configuration validation fails, before session lookup. It is distinct from a Vercel `FUNCTION_INVOCATION_FAILED` response and from dashboard data's expected `503 UPSTREAM_UNCONFIGURED` response. The public body remains the stable JSON code `{"error":"authentication_unavailable"}`. Vercel Runtime Logs include `[dashboard-auth] Invalid server configuration` and the names of invalid settings only; secret values are never logged.
+
+Check the settings for the deployment environment that produced the request:
+
+- [ ] `DASHBOARD_AUTH_URL` is the exact HTTPS origin, with no path, query, fragment, or trailing slash.
+- [ ] `DASHBOARD_SESSION_SECRET` is at least 32 bytes.
+- [ ] `GOOGLE_CLIENT_ID` is the Google OAuth Web client ID.
+- [ ] `GOOGLE_CLIENT_SECRET` is present for that same Web client.
+- [ ] `DASHBOARD_ALLOWED_USERS` is a nonempty JSON object mapping approved email addresses to `admin`, `operator`, or `viewer`.
+- [ ] These values are configured in Vercel's **Production** scope for Production deployments and in **Preview** for Preview deployments. Vercel does not copy a Production-scoped value into Preview. If Preview OAuth is not enabled, Preview may intentionally remain unconfigured and return 503.
+- [ ] None of these server-only values use a `VITE_` prefix.
+- [ ] Google Cloud OAuth uses application type **Web application** and has the exact authorized redirect URI `https://<dashboard-origin>/api/auth/callback` for each origin enabled for login. The origin in `DASHBOARD_AUTH_URL` must match that deployment.
+
+After correcting a setting, redeploy the affected environment. With valid auth configuration and no session cookie, `GET /api/auth/session` should return JSON `401`; a valid session returns JSON `200`. `GET /api/auth/login` should redirect to `accounts.google.com`. The session route returns 503 while any required setting is missing or invalid; do not treat that as a signed-out session.
+
 ### Current safe deployment configuration
 
 There is currently no verified independent testing API. Set `DASHBOARD_DATA_MODE=unconfigured` and leave both upstream variables empty. Authentication can work when its Google/provider variables are configured; protected data routes then return `503 UPSTREAM_UNCONFIGURED` with no fake data. Do not set the upstream to `https://g11server.tailaff2e5.ts.net` or to the live middleware.

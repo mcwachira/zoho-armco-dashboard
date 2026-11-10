@@ -84,13 +84,20 @@ interface GoogleKeyCache {
 
 let googleKeyCache: GoogleKeyCache | undefined
 
-function parseAuthUrl(value: string | undefined): string {
-  if (!value) throw new Error('DASHBOARD_AUTH_URL is required.')
+class AuthConfigurationError extends Error {
+  constructor(readonly variables: string[]) {
+    super(`Authentication configuration is invalid for: ${variables.join(', ')}`)
+    this.name = 'AuthConfigurationError'
+  }
+}
+
+function parseAuthUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined
   let parsed: URL
   try {
     parsed = new URL(value)
   } catch {
-    throw new Error('DASHBOARD_AUTH_URL must be an HTTPS origin.')
+    return undefined
   }
   if (
     parsed.protocol !== 'https:' ||
@@ -98,50 +105,68 @@ function parseAuthUrl(value: string | undefined): string {
     parsed.password ||
     parsed.pathname !== '/' ||
     parsed.search ||
-    parsed.hash
+    parsed.hash ||
+    value !== parsed.origin
   ) {
-    throw new Error('DASHBOARD_AUTH_URL must be an HTTPS origin without a path.')
+    return undefined
   }
   return parsed.origin
 }
 
 export function getAuthConfig(env: Record<string, string | undefined> = process.env): AuthConfig {
+  const invalidVariables = new Set<string>()
   const authUrl = parseAuthUrl(env.DASHBOARD_AUTH_URL)
+  if (!authUrl) invalidVariables.add('DASHBOARD_AUTH_URL')
+
   const sessionSecret = env.DASHBOARD_SESSION_SECRET
   if (!sessionSecret || Buffer.byteLength(sessionSecret, 'utf8') < 32) {
-    throw new Error('DASHBOARD_SESSION_SECRET must contain at least 32 bytes.')
+    invalidVariables.add('DASHBOARD_SESSION_SECRET')
   }
+
   const googleClientId = env.GOOGLE_CLIENT_ID
   const googleClientSecret = env.GOOGLE_CLIENT_SECRET
-  if (!googleClientId || !googleClientSecret) {
-    throw new Error('Google OAuth client configuration is incomplete.')
-  }
+  if (!googleClientId) invalidVariables.add('GOOGLE_CLIENT_ID')
+  if (!googleClientSecret) invalidVariables.add('GOOGLE_CLIENT_SECRET')
+
   const rawAllowlist = env.DASHBOARD_ALLOWED_USERS
-  if (!rawAllowlist) throw new Error('DASHBOARD_ALLOWED_USERS is required.')
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(rawAllowlist)
-  } catch {
-    throw new Error('DASHBOARD_ALLOWED_USERS must be a JSON email-to-role object.')
-  }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error('DASHBOARD_ALLOWED_USERS must be a JSON email-to-role object.')
-  }
   const allowedUsers: Record<string, DashboardRole> = {}
-  for (const [email, role] of Object.entries(parsed)) {
-    const normalizedEmail = email.trim().toLowerCase()
-    if (
-      !normalizedEmail ||
-      !normalizedEmail.includes('@') ||
-      typeof role !== 'string' ||
-      !ROLE_SET.has(role as DashboardRole)
-    ) {
-      throw new Error('DASHBOARD_ALLOWED_USERS contains an invalid email or role.')
+  if (!rawAllowlist) {
+    invalidVariables.add('DASHBOARD_ALLOWED_USERS')
+  } else {
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(rawAllowlist)
+    } catch {
+      parsed = undefined
     }
-    allowedUsers[normalizedEmail] = role as DashboardRole
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      invalidVariables.add('DASHBOARD_ALLOWED_USERS')
+    } else {
+      for (const [email, role] of Object.entries(parsed)) {
+        const normalizedEmail = email.trim().toLowerCase()
+        if (
+          !normalizedEmail ||
+          !normalizedEmail.includes('@') ||
+          typeof role !== 'string' ||
+          !ROLE_SET.has(role as DashboardRole)
+        ) {
+          invalidVariables.add('DASHBOARD_ALLOWED_USERS')
+          continue
+        }
+        allowedUsers[normalizedEmail] = role as DashboardRole
+      }
+      if (!Object.keys(allowedUsers).length) invalidVariables.add('DASHBOARD_ALLOWED_USERS')
+    }
   }
-  if (!Object.keys(allowedUsers).length) throw new Error('DASHBOARD_ALLOWED_USERS cannot be empty.')
-  return { authUrl, sessionSecret, googleClientId, googleClientSecret, allowedUsers }
+
+  if (invalidVariables.size) throw new AuthConfigurationError([...invalidVariables])
+  return {
+    authUrl: authUrl!,
+    sessionSecret: sessionSecret!,
+    googleClientId: googleClientId!,
+    googleClientSecret: googleClientSecret!,
+    allowedUsers,
+  }
 }
 
 function cookieValue(request: VercelRequest, name: string): string | undefined {
@@ -386,7 +411,14 @@ export default async function authHandler(
   let config: AuthConfig
   try {
     config = getAuthConfig()
-  } catch {
+  } catch (error) {
+    if (error instanceof AuthConfigurationError) {
+      console.error('[dashboard-auth] Invalid server configuration', {
+        variables: error.variables,
+      })
+    } else {
+      console.error('[dashboard-auth] Unexpected configuration initialization failure')
+    }
     safeError(response, 503, 'authentication_unavailable')
     return
   }

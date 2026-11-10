@@ -93,7 +93,13 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
         return
       }
       if (!response.ok) {
-        setSession(null, 'unavailable', 'Dashboard authentication is not configured.')
+        setSession(
+          null,
+          'unavailable',
+          response.status === 503
+            ? 'Authentication is not configured for this environment.'
+            : `Authentication service returned HTTP ${response.status}.`,
+        )
         return
       }
       if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) {

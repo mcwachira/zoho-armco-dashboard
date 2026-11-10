@@ -81,7 +81,50 @@ describe('Vercel Google OIDC auth boundary', () => {
         GOOGLE_CLIENT_SECRET: 'secret',
         DASHBOARD_ALLOWED_USERS: '{"a@example.test":"root"}',
       }),
-    ).toThrow('invalid email or role')
+    ).toThrow('DASHBOARD_ALLOWED_USERS')
+  })
+
+  it.each([
+    'DASHBOARD_AUTH_URL',
+    'DASHBOARD_SESSION_SECRET',
+    'GOOGLE_CLIENT_ID',
+    'GOOGLE_CLIENT_SECRET',
+    'DASHBOARD_ALLOWED_USERS',
+  ] as const)('logs only the missing setting name and returns a stable 503 for %s', async (key) => {
+    configure()
+    delete process.env[key]
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const res = responseMock()
+
+    await authHandler(request('GET', '/api/auth/session'), res.response)
+
+    expect(res.status()).toBe(503)
+    expect(JSON.parse(res.body() ?? '')).toEqual({ error: 'authentication_unavailable' })
+    expect(log).toHaveBeenCalledWith('[dashboard-auth] Invalid server configuration', {
+      variables: [key],
+    })
+    expect(JSON.stringify(log.mock.calls)).not.toContain(secret)
+  })
+
+  it.each([
+    ['DASHBOARD_AUTH_URL', 'https://dashboard.example.test/path'],
+    ['DASHBOARD_AUTH_URL', 'https://dashboard.example.test/'],
+    ['DASHBOARD_SESSION_SECRET', 'too-short'],
+    ['DASHBOARD_ALLOWED_USERS', '{invalid-json'],
+  ] as const)('logs the setting name when %s has an invalid format', async (key, value) => {
+    configure()
+    process.env[key] = value
+    const log = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const res = responseMock()
+
+    await authHandler(request('GET', '/api/auth/session'), res.response)
+
+    expect(res.status()).toBe(503)
+    expect(JSON.parse(res.body() ?? '')).toEqual({ error: 'authentication_unavailable' })
+    expect(log).toHaveBeenCalledWith('[dashboard-auth] Invalid server configuration', {
+      variables: [key],
+    })
+    expect(JSON.stringify(log.mock.calls)).not.toContain(value)
   })
 
   it('starts Google authorization with state, nonce and PKCE and sets a protected transient cookie', async () => {

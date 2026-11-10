@@ -44,7 +44,9 @@ describe('server authentication session handling', () => {
     )
 
     expect(
-      await screen.findByText('unavailable|no-user|Dashboard authentication is not configured.'),
+      await screen.findByText(
+        'unavailable|no-user|Authentication is not configured for this environment.',
+      ),
     ).toBeInTheDocument()
   })
 
