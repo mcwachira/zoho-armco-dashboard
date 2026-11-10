@@ -290,7 +290,7 @@ export function requireDashboardRole(
   env?: Record<string, string | undefined>,
 ): DashboardSession | null {
   const result = authorizeDashboardRequest(request, requiredRoles, env)
-  if (!result.ok) safeError(response, result.status, result.error)
+  if (result.ok === false) safeError(response, result.status, result.error)
   return result.ok ? result.session : null
 }
 
@@ -391,8 +391,8 @@ export default async function authHandler(
     return
   }
   const segments = requestPath(request).split('/').filter(Boolean)
-  const lastSegment = segments.at(-1)
-  const path = lastSegment === 'google' ? segments.at(-2) : lastSegment
+  const lastSegment = segments[segments.length - 1]
+  const path = lastSegment === 'google' ? segments[segments.length - 2] : lastSegment
   const secure = secureCookie(config)
   if (path === 'login' || path === 'signin') {
     if (request.method !== 'GET') return methodNotAllowed(response, 'GET')
