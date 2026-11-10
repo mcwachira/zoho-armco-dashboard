@@ -104,6 +104,24 @@ describe('Vercel Google OIDC auth boundary', () => {
     expect(String(res.headers['set-cookie'])).toContain('SameSite=Lax')
   })
 
+  it('routes the Google-specific sign-in and callback paths to the existing OIDC handler', async () => {
+    configure()
+    const signIn = responseMock()
+    await authHandler(request('GET', '/api/auth/signin/google'), signIn.response)
+    expect(signIn.status()).toBe(302)
+    expect(new URL(String(signIn.headers.location)).origin).toBe('https://accounts.google.com')
+
+    const callback = responseMock()
+    await authHandler(
+      request('GET', '/api/auth/callback/google?code=code&state=wrong', {
+        cookie: '__Host-dashboard_oauth=not-a-valid-signed-state',
+      }),
+      callback.response,
+    )
+    expect(callback.status()).toBe(400)
+    expect(callback.body()).toContain('authentication_failed')
+  })
+
   it('rejects callback state mismatches without contacting Google', async () => {
     configure()
     const fetch = vi.fn()

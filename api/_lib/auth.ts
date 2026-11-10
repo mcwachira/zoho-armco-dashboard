@@ -390,9 +390,11 @@ export default async function authHandler(
     safeError(response, 503, 'authentication_unavailable')
     return
   }
-  const path = requestPath(request).split('/').filter(Boolean).at(-1)
+  const segments = requestPath(request).split('/').filter(Boolean)
+  const lastSegment = segments.at(-1)
+  const path = lastSegment === 'google' ? segments.at(-2) : lastSegment
   const secure = secureCookie(config)
-  if (path === 'login') {
+  if (path === 'login' || path === 'signin') {
     if (request.method !== 'GET') return methodNotAllowed(response, 'GET')
     const state: OAuthState = {
       state: randomToken(),

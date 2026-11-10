@@ -96,6 +96,10 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
         setSession(null, 'unavailable', 'Dashboard authentication is not configured.')
         return
       }
+      if (!response.headers.get('content-type')?.toLowerCase().includes('application/json')) {
+        setSession(null, 'unavailable', 'Dashboard authentication returned a non-JSON response.')
+        return
+      }
       const payload: unknown = await response.json()
       if (
         !payload ||

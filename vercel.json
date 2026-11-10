@@ -4,7 +4,12 @@
     "api/auth/**/*.ts": { "maxDuration": 20 },
     "api/dashboard/**/*.ts": { "maxDuration": 10 }
   },
-  "rewrites": [{ "source": "/(.*)", "destination": "/index.html" }],
+  "rewrites": [
+    {
+      "source": "/:path((?!api(?:/|$)).*)",
+      "destination": "/index.html"
+    }
+  ],
   "headers": [
     {
       "source": "/(.*)",
