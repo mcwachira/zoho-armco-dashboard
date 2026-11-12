@@ -183,17 +183,18 @@ function DataState({
   return null
 }
 
-function StatusBadge({ value }: { value: string | null | undefined }) {
+export function statusBadgeTone(value: string | null | undefined): 'good' | 'bad' | 'warn' | 'neutral' {
   const normalized = (value ?? 'unknown').toLowerCase()
-  const tone = /succeed|complete|confirm|fiscalized|available|reachable|ready|accepted/.test(
-    normalized,
-  )
-    ? 'good'
-    : /fail|reject|unavailable|error|conflict/.test(normalized)
-      ? 'bad'
-      : /pending|progress|review|unknown|blocked|partial|not_configured|unverified/.test(normalized)
-        ? 'warn'
-        : 'neutral'
+  if (/unavailable|not[_ -]?available|fail|reject|error|conflict/.test(normalized)) return 'bad'
+  if (/pending|progress|review|unknown|blocked|partial|not_configured|unverified/.test(normalized))
+    return 'warn'
+  if (/succeed|complete|confirm|fiscalized|available|reachable|ready|accepted/.test(normalized))
+    return 'good'
+  return 'neutral'
+}
+
+function StatusBadge({ value }: { value: string | null | undefined }) {
+  const tone = statusBadgeTone(value)
   return (
     <span className={`badge ${tone}`}>
       <i />

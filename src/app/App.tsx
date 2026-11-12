@@ -264,7 +264,7 @@ function Shell() {
           {nav.map((item) => (
             <NavLink
               onClick={() => setMobileNav(false)}
-              title={collapsed ? item.label : undefined}
+              title={item.label}
               className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
               to={item.path}
               key={item.path}
@@ -801,6 +801,7 @@ function Overview() {
         action={
           <button
             className="button secondary"
+            aria-label="Export report"
             onClick={() => {
               exportSubmissions(rangeSubmissions)
               toast.success('Demo snapshot exported as CSV')

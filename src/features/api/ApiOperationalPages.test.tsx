@@ -101,7 +101,10 @@ describe('authenticated operational views', () => {
     })
     vi.stubGlobal('fetch', fetchSpy)
     vi.resetModules()
-    const { ApiFiscalization } = await import('./ApiOperationalPages')
+    const { ApiFiscalization, statusBadgeTone } = await import('./ApiOperationalPages')
+    expect(statusBadgeTone('unavailable')).toBe('bad')
+    expect(statusBadgeTone('not_available')).toBe('bad')
+    expect(statusBadgeTone('available')).toBe('good')
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const user = userEvent.setup()
 
