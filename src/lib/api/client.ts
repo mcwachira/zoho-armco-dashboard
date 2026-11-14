@@ -3,7 +3,7 @@ import { dataModeConfig } from '@/lib/config'
 
 const settings = {
   baseUrl: '',
-  timeoutMs: 8_000,
+  timeoutMs: 10_000,
 }
 
 export type ApiMode = 'mock' | 'api'
@@ -24,6 +24,8 @@ export class ApiError extends Error {
     message: string,
     public readonly status?: number,
     public readonly kind: ApiErrorKind = 'http',
+    public readonly code?: string,
+    public readonly requestId?: string,
   ) {
     super(message)
     this.name = 'ApiError'
@@ -51,6 +53,12 @@ export async function getJson<T>(
     )
   if (!path.startsWith('/api/dashboard/'))
     throw new ApiError('Only dashboard read routes are available.', undefined, 'configuration')
+  if (!/^\/api\/dashboard\/(overview|invoices|credit-notes|services)(\?|$)/.test(path))
+    throw new ApiError(
+      'This resource is not exposed by the middleware dashboard API.',
+      undefined,
+      'disabled',
+    )
   if (signal?.aborted) throw new ApiError('Request was cancelled.', undefined, 'cancelled')
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
@@ -69,10 +77,40 @@ export async function getJson<T>(
       if (response.status === 401 && typeof window !== 'undefined') {
         window.dispatchEvent(new Event('zoho-auth-unauthorized'))
       }
+      let message = `Dashboard gateway returned HTTP ${response.status}.`
+      let code: string | undefined
+      let requestId = response.headers.get('x-request-id') ?? undefined
+      try {
+        const payload: unknown = await response.json()
+        if (payload && typeof payload === 'object' && 'error' in payload) {
+          const error = payload.error
+          if (error && typeof error === 'object') {
+            if (
+              'message' in error &&
+              typeof error.message === 'string' &&
+              error.message.length <= 500
+            )
+              message = error.message
+            if (
+              'code' in error &&
+              typeof error.code === 'string' &&
+              /^[A-Za-z0-9_]{1,80}$/.test(error.code)
+            )
+              code = error.code
+            if ('requestId' in error && typeof error.requestId === 'string')
+              requestId = error.requestId
+          }
+        }
+      } catch {
+        /* HTML/platform failures retain the HTTP status fallback. */
+      }
+      if (requestId && !/^[A-Za-z0-9._:-]{1,128}$/.test(requestId)) requestId = undefined
       throw new ApiError(
-        `Dashboard gateway returned HTTP ${response.status}.`,
+        `${message}${code ? ` [${code}]` : ''}${requestId ? ` Request ID: ${requestId}` : ''}`,
         response.status,
         kind,
+        code,
+        requestId,
       )
     }
     let payload: unknown

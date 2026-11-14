@@ -1,12 +1,12 @@
 # ZohoAmarco Monitoring Dashboard
 
-ZohoAmarco Monitoring Dashboard is a read-only web application for monitoring invoice and credit-note fiscalization operations, receipt evidence, Zoho writeback state, reconciliation coverage, device diagnostics, and service health. It is designed to use a separately verified testing API through protected same-origin serverless functions.
+ZohoAmarco Monitoring Dashboard is a read-only web application for monitoring invoice and credit-note fiscalization operations, receipt evidence, Zoho writeback state, reconciliation coverage, device diagnostics, and service health. It uses protected same-origin server functions to reach the authenticated middleware gateway.
 
 The dashboard does not submit fiscalization requests, create or update Zoho documents, retry transactions, operate fiscal hardware, or modify reconciliation or manual-review records. The existing Zoho button gateway is a separate workflow and is not used by this application.
 
 ## Current data availability
 
-The repository does not identify a verified independent testing API. A deployment can still serve the application and authenticate users, but protected data calls return a clear `503 UPSTREAM_UNCONFIGURED` response until an independent, read-only testing API is separately verified and configured. The application does not invent live records or silently fall back to demo fixtures.
+Dashboard reads require the public gateway URL and a dedicated server-held service credential. Missing settings return `503 UPSTREAM_UNCONFIGURED`. Gateway/middleware changes and desktop verification are required before a separately authorized production deployment. The application does not invent live records or silently fall back to demo fixtures.
 
 Local development defaults to explicitly labeled `DEMO` fixtures. Demo identities and data are development-only and do not represent live accounting or fiscalization information.
 
@@ -31,8 +31,8 @@ flowchart LR
   SPA[Vercel-hosted Vite SPA]
   API[Same-origin Vercel API Functions]
   Auth[Google OIDC session and server-side role checks]
-  Adapter[GET-only testing API adapter and Zod validation]
-  TestAPI[Independent testing API, when verified]
+  Adapter[Four GET resources and Zod validation]
+  TestAPI[Authenticated public gateway to middleware]
   Browser --> SPA
   SPA -->|same-origin /api/*| API
   API --> Auth
@@ -40,7 +40,7 @@ flowchart LR
   Adapter -->|fixed read-only route allowlist| TestAPI
 ```
 
-The browser calls only `/api/dashboard/*` on its own origin. It never calls the upstream testing API directly. Local demo mode uses validated fixtures and does not call the dashboard API.
+The browser calls only `/api/dashboard/*` on its own origin. It never calls the upstream gateway directly. Local demo mode uses validated fixtures and does not call the dashboard API.
 
 ## Technology
 
@@ -71,7 +71,7 @@ Important root files: `package.json` defines commands and runtime versions; `pnp
 - Node.js `>=22.12.0 <23` (Vercel Node.js 22).
 - pnpm `12.16.1` as declared by `packageManager`.
 - A Google Cloud OAuth Web client and Vercel project for hosted authentication.
-- An independent HTTPS testing API is optional. No such API is currently verified or configured.
+- Data integration requires authenticated gateway GET support. Desktop verification targets port 3004.
 
 Install prerequisites before using the commands below. On Windows, use PowerShell from the repository root.
 
@@ -102,19 +102,18 @@ pnpm run preview
 
 Copy `.env.example` to `.env.local` for local use. All `VITE_` variables are compiled into browser-visible client code; never put credentials or private values in them. The remaining variables are server-only and belong in Vercel Function environment settings, not in browser code.
 
-| Variable                      | Required                     | Scope / sensitive                   | Purpose and example                                                                                              | Environments                           |
-| ----------------------------- | ---------------------------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
-| `VITE_DATA_MODE`              | Yes for production           | Public, not secret                  | `mock` only for local demo; production must use `api`.                                                           | Local, Preview, Production             |
-| `VITE_AUTH_MODE`              | No                           | Public, not secret                  | `development-mock` enables a local demo identity only in Vite development. Do not set on Vercel.                 | Local only                             |
-| `VITE_REFRESH_INTERVAL_MS`    | No                           | Public, not secret                  | Refresh interval in milliseconds, minimum 10000; default `30000`.                                                | Local, Preview, Production             |
-| `DASHBOARD_DATA_MODE`         | Yes for API behavior         | Server-only, not secret             | `unconfigured` safely disables upstream reads; `testing-api` opts into an independently verified API.            | Vercel Preview/Production              |
-| `DASHBOARD_UPSTREAM_BASE_URL` | Only in testing API mode     | Server-only, usually not secret     | HTTPS origin of the verified independent testing API, e.g. `https://<verified-testing-api-host>`. No path/query. | Only after verification                |
-| `DASHBOARD_UPSTREAM_TOKEN`    | Only if upstream requires it | Server-only secret                  | Bearer credential for the testing API. Obtain from that API's owner.                                             | Only after verification                |
-| `DASHBOARD_AUTH_URL`          | Yes for hosted login         | Server-only, not secret             | Exact HTTPS origin, e.g. `https://dashboard.example.com`; no path.                                               | Each enabled Preview/Production origin |
-| `DASHBOARD_SESSION_SECRET`    | Yes for hosted login         | Server-only secret                  | Random signing secret of at least 32 bytes. Generate with the command below.                                     | Unique per environment                 |
-| `GOOGLE_CLIENT_ID`            | Yes for hosted login         | Server-only identifier              | Google OAuth Web client ID.                                                                                      | Each enabled environment               |
-| `GOOGLE_CLIENT_SECRET`        | Yes for hosted login         | Server-only secret                  | Google OAuth Web client secret. Never commit it.                                                                 | Each enabled environment               |
-| `DASHBOARD_ALLOWED_USERS`     | Yes for hosted login         | Server-only; contains personal data | JSON email-to-role map, e.g. `{"admin@example.com":"admin","viewer@example.com":"viewer"}`.                      | Each enabled environment               |
+| Variable                      | Required                | Scope / sensitive                   | Purpose and example                                                                              | Environments                           |
+| ----------------------------- | ----------------------- | ----------------------------------- | ------------------------------------------------------------------------------------------------ | -------------------------------------- |
+| `VITE_DATA_MODE`              | Yes for production      | Public, not secret                  | `mock` only for local demo; production must use `api`.                                           | Local, Preview, Production             |
+| `VITE_AUTH_MODE`              | No                      | Public, not secret                  | `development-mock` enables a local demo identity only in Vite development. Do not set on Vercel. | Local only                             |
+| `VITE_REFRESH_INTERVAL_MS`    | No                      | Public, not secret                  | Refresh interval in milliseconds, minimum 10000; default `30000`.                                | Local, Preview, Production             |
+| `DASHBOARD_UPSTREAM_BASE_URL` | Yes for dashboard reads | Server-only, usually not secret     | `https://g11server.tailaff2e5.ts.net`; exact HTTPS gateway origin.                               | Authorized deployment only             |
+| `DASHBOARD_UPSTREAM_TOKEN`    | Yes for dashboard reads | Server-only secret                  | Dedicated dashboard service Bearer credential shared with the gateway/middleware.                | Authorized deployment only             |
+| `DASHBOARD_AUTH_URL`          | Yes for hosted login    | Server-only, not secret             | Exact HTTPS origin, e.g. `https://dashboard.example.com`; no path.                               | Each enabled Preview/Production origin |
+| `DASHBOARD_SESSION_SECRET`    | Yes for hosted login    | Server-only secret                  | Random signing secret of at least 32 bytes. Generate with the command below.                     | Unique per environment                 |
+| `GOOGLE_CLIENT_ID`            | Yes for hosted login    | Server-only identifier              | Google OAuth Web client ID.                                                                      | Each enabled environment               |
+| `GOOGLE_CLIENT_SECRET`        | Yes for hosted login    | Server-only secret                  | Google OAuth Web client secret. Never commit it.                                                 | Each enabled environment               |
+| `DASHBOARD_ALLOWED_USERS`     | Yes for hosted login    | Server-only; contains personal data | JSON email-to-role map, e.g. `{"admin@example.com":"admin","viewer@example.com":"viewer"}`.      | Each enabled environment               |
 
 Generate a session secret locally and copy its output directly to the Vercel secret field:
 
@@ -142,31 +141,28 @@ Troubleshooting: a callback mismatch means the Google redirect URI and `DASHBOAR
 
 All dashboard data routes are same-origin, authenticated, read-only `GET` endpoints. They return `Cache-Control: no-store`. The auth endpoints are described separately below.
 
-| Method and route                                        | Purpose / parameters                                                                                                                               | Data dependency                                              |
-| ------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `GET /api/dashboard/capabilities`                       | Reports capability availability and provenance. No parameters.                                                                                     | Testing API, otherwise 503                                   |
-| `GET /api/dashboard/invoices`                           | Invoice page. `page`, `pageSize`, `search`, `createdFrom`, `createdTo`, `status`, `transmissionStatus`, `reconciliationStatus`, `writebackStatus`. | Testing API                                                  |
-| `GET /api/dashboard/invoices/{requestId}`               | Invoice detail and available attempts/evidence/timeline.                                                                                           | Testing API                                                  |
-| `GET /api/dashboard/credit-notes`                       | Credit-note page. `page`, `pageSize`, `search`, `createdFrom`, `createdTo`, `state`, `reconciliationState`, `writebackState`.                      | Testing API                                                  |
-| `GET /api/dashboard/credit-notes/{requestId}`           | Credit-note detail and available evidence/timeline.                                                                                                | Testing API                                                  |
-| `GET /api/dashboard/overview?createdFrom=…&createdTo=…` | Date-bounded operational aggregates where supported.                                                                                               | Testing API                                                  |
-| `GET /api/dashboard/writebacks`                         | Dedicated writeback collection capability; currently unavailable in the source contract.                                                           | Testing API; often partial/unavailable                       |
-| `GET /api/dashboard/manual-review?page=…&pageSize=…`    | Bounded manual-review records; total may be unknown.                                                                                               | Testing API                                                  |
-| `GET /api/dashboard/reconciliation`                     | Reconciliation coverage and availability; no complete record collection in current source.                                                         | Testing API; partial                                         |
-| `GET /api/dashboard/device`                             | Device diagnostics only where provided.                                                                                                            | Testing API; source omits some identity/communication fields |
-| `GET /api/dashboard/services`                           | Service and dependency status.                                                                                                                     | Testing API; source omits some gateway fields                |
-| `GET /api/auth/login`                                   | Starts Google login with state, nonce and PKCE.                                                                                                    | Google OAuth and auth configuration                          |
-| `GET /api/auth/callback`                                | Validates OAuth callback and creates session.                                                                                                      | Google OAuth and auth configuration                          |
-| `GET /api/auth/session`                                 | Returns the current allowlisted session identity and role.                                                                                         | Valid session                                                |
-| `POST /api/auth/logout`                                 | Clears session cookies; requires same-origin `Origin`.                                                                                             | Valid deployment origin                                      |
+| Method and route                  | Purpose                                                         |
+| --------------------------------- | --------------------------------------------------------------- |
+| `GET /api/dashboard/overview`     | Required `createdFrom` and `createdTo`; date-bounded aggregates |
+| `GET /api/dashboard/invoices`     | Pagination, search, dates and supported invoice filters         |
+| `GET /api/dashboard/credit-notes` | Pagination, search, dates and supported credit-note filters     |
+| `GET /api/dashboard/services`     | Observational service/dependency status                         |
+| `GET /api/auth/login`             | Existing Google login                                           |
+| `GET /api/auth/callback`          | Existing OAuth callback/session creation                        |
+| `GET /api/auth/session`           | Existing allowlisted session                                    |
+| `POST /api/auth/logout`           | Existing same-origin logout                                     |
+
+Only these four data resources are forwarded. Standalone manual-review is unavailable;
+other unsupported resources are rejected locally without fetch. Demo fixtures remain
+available in Vite mock mode.
 
 Query limits and response schemas are enforced with Zod. Data routes return `400` for invalid parameters, `401` for unauthenticated requests, `403` for rejected authorization, `404` for unknown resources, `405` for unsupported methods, `502` for invalid/unavailable upstream responses and `503` when auth/upstream is unconfigured. Error bodies are normalized and do not expose upstream response content. All data routes reject non-GET methods.
 
-## Independent testing API integration
+## Middleware gateway integration
 
-The gateway forwards only a fixed list of HTTPS GET routes, applies an eight-second timeout, rejects redirects, bounds response size, validates responses with the matching Zod schema and never sends upstream credentials to the browser. `DASHBOARD_DATA_MODE` must be explicitly set to `testing-api`, with a valid HTTPS origin. The known Zoho submission hostname is explicitly rejected by the gateway.
+The server forwards only overview, invoices, credit-notes and services GET resources to the configured HTTPS gateway. It requires a dedicated service credential, rejects redirects, bounds responses and validates JSON. The production hostname is allowed; no testing-only mode is required. Existing browser session handling is unchanged.
 
-Before enabling data, independently verify that the service is non-production, read-only, reachable from Vercel, and implements the documented DTOs. The device and service DTOs differ from the audited middleware source, while complete writeback/reconciliation collections are unavailable; do not invent mappings or fields. Configure only the test service's own token if required. If no such service is ready, keep `DASHBOARD_DATA_MODE=unconfigured` and upstream variables empty. See [API integration](docs/API-INTEGRATION.md) and [API contract audit](docs/API-CONTRACT-AUDIT.md).
+Standalone manual-review requests are removed from live transport; unsupported resources are rejected before fetch. Schemas remain unchanged until actual responses demonstrate a mismatch. Use the opt-in desktop tests on port 3004 before a separately authorized deployment. See [current integration and test instructions](docs/API-INTEGRATION.md). The older contract audit is historical, not current production evidence.
 
 ## GitHub setup
 
@@ -191,22 +187,22 @@ If a remote named `origin` already exists, inspect it before changing it. The re
 4. Build command: `pnpm run build`.
 5. Output directory: `dist`.
 6. Leave function discovery at the default; Vercel discovers handlers in root `api/`. `vercel.json` sets function durations and security headers; the SPA rewrite is a fallback after function routing.
-7. Configure environment variables separately for Preview and Production. Use `VITE_DATA_MODE=api`, auth variables for enabled origins, and `DASHBOARD_DATA_MODE=unconfigured` until a testing API has passed verification.
+7. Configure environment variables separately for Preview and Production only after deployment authorization. Use `VITE_DATA_MODE=api`, existing auth settings, the gateway origin and dedicated dashboard credential.
 8. Add each exact deployment origin to `DASHBOARD_AUTH_URL` and its Google OAuth callback as `https://<origin>/api/auth/callback`. Preview URLs require their own matching OAuth configuration if preview login is enabled.
 9. Deploy from Vercel when ready. Set up any custom domain in Vercel first, then update the auth origin and Google callback to that final HTTPS domain.
-10. After your deployment, log in with an allowlisted user, inspect `/api/auth/session`, confirm unauthenticated reads return `401`, and confirm `/api/dashboard/capabilities` returns the explicit unconfigured response. No Preview or Production deployment has been tested by this repository audit.
+10. After an authorized deployment, verify `/api/auth/session`, unauthorized reads, and the four supported resources. No deployment is performed by local implementation or tests.
 
-More detail: [GitHub-to-Vercel deployment](docs/VERCEL-DEPLOYMENT.md). Do not configure the existing live middleware or Zoho gateway as the dashboard upstream.
+More detail: [GitHub-to-Vercel deployment](docs/VERCEL-DEPLOYMENT.md) and [gateway integration](docs/API-INTEGRATION.md). The Zoho submission POST is unchanged.
 
 ## Security
 
-Authentication and authorization are enforced in serverless handlers, not trusted from browser-supplied roles. Session signing keys, Google client secrets and optional testing API tokens are server-only. The gateway is fixed-route and GET-only, does not use a persistent filesystem, and does not call the Zoho submission gateway. Security headers include CSP, HSTS, frame denial, MIME sniffing protection, referrer policy and a restrictive permissions policy.
+Authentication and authorization are enforced in serverless handlers, not trusted from browser-supplied roles. Session signing keys, Google client secrets and required dashboard service credentials are server-only. The gateway is fixed-route and GET-only, does not use a persistent filesystem, and never calls the Zoho fiscalization submission POST. Security headers include CSP, HSTS, frame denial, MIME sniffing protection, referrer policy and a restrictive permissions policy.
 
 The application does not implement login rate limiting; use hosting-edge rate controls before broad exposure. Keep Vercel Preview access restricted and do not configure Preview with production data credentials. Rotate any credential accidentally committed before publishing; deleting a committed secret does not remove it from Git history.
 
 ## Tests and verification
 
-The test suite includes frontend route and interaction tests, mock no-network behavior, API client/query/schema tests, gateway validation and error tests, and authentication/session tests using mocked provider/upstream responses. Tests do not contact the live middleware, database, Zoho, gateway or device. Run the exact verification set:
+The test suite includes frontend route and interaction tests, mock no-network behavior, API client/query/schema tests, gateway validation and error tests, and authentication/session tests using mocked provider/upstream responses. Normal tests do not contact middleware, database, Zoho, gateway or device. Explicit desktop integration tests contact only port 3004; see the integration guide. Run the exact verification set:
 
 ```powershell
 pnpm install --frozen-lockfile
@@ -221,7 +217,7 @@ See the CI workflow at `.github/workflows/`. These commands must pass in the tar
 
 ## Known limitations
 
-- There is no verified independent testing API configured. Hosted dashboard data therefore remains unavailable until one is independently established.
+- Matching gateway/middleware source, authenticated GET support and desktop responses are required to finish end-to-end verification.
 - Device serial number, physical health, last communication and history are not available from the audited source.
 - Service data does not establish gateway health or last successful gateway communication.
 - The source lacks complete writeback and reconciliation collections, a complete manual-review total, historical uptime, financial totals and processing-time trends. Any counts without complete coverage are marked partial or lower-bound where supported.
@@ -235,7 +231,7 @@ See the CI workflow at `.github/workflows/`. These commands must pass in the tar
 - **Google callback mismatch:** use the exact `https://<origin>/api/auth/callback` URL in Google and the matching origin in `DASHBOARD_AUTH_URL`.
 - **`401`:** sign in again; the session may be absent, expired or invalid.
 - **`403`:** check the normalized email and role in `DASHBOARD_ALLOWED_USERS`.
-- **`503 UPSTREAM_UNCONFIGURED`:** expected until the separate testing API is verified and configured; do not point it at live Zoho or middleware.
+- **`503 UPSTREAM_UNCONFIGURED`:** configure the gateway origin and dedicated dashboard read credential in an authorized environment. Never use Zoho or operator credentials.
 - **`502` / invalid upstream response:** verify test API reachability, allowed routes, timeout and exact Zod DTO compatibility. Upstream error bodies are intentionally hidden.
 - **API URL returns HTML:** confirm Vercel discovered root `api/` functions and that the deployment used this repository root; `/api/*` must not return `index.html`.
 - **Build/install failure:** use Node 22.12+ and pnpm 12.16.1, then run the frozen-lockfile install from the repository root.

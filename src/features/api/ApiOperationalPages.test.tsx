@@ -44,7 +44,7 @@ const invoice = {
 }
 
 describe('authenticated operational views', () => {
-  it('renders persisted invoice data, applies server search and opens the API detail timeline', async () => {
+  it('renders persisted invoice data and search without calling unsupported detail endpoints', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
     vi.stubEnv('VITE_API_BASE_URL', 'https://middleware.example.test')
@@ -133,10 +133,14 @@ describe('authenticated operational views', () => {
     })
 
     await user.click(screen.getByText('INV-42'))
-    expect(await screen.findByRole('dialog', { name: 'INV-42' })).toBeInTheDocument()
-    expect(await screen.findByText('request_received')).toBeInTheDocument()
-    expect(screen.getByText('Persisted request detail')).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'request-42' })).toBeInTheDocument()
+    expect(
+      await screen.findByText('This resource is not exposed by the middleware dashboard API.'),
+    ).toBeInTheDocument()
+    expect(
+      fetchSpy.mock.calls.some(([input]) => String(input).includes('/invoices/request-42')),
+    ).toBe(false)
 
     queryClient.clear()
-  })
+  }, 15_000)
 })

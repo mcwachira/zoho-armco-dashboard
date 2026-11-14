@@ -1,49 +1,76 @@
-# Dashboard API and data integration
+# Dashboard middleware integration
 
-## Current data source status
+Browser → dashboard server → authenticated public gateway → middleware dashboard API.
+Existing Google login, session cookies and the role allowlist protect browser reads.
+No middleware credential is sent to the browser. Vite development remains fixture-only.
 
-Local development in `VITE_DATA_MODE=mock` uses local Zod-validated fixtures and shows DEMO labeling. Mock mode never calls `/api`. Production builds reject mock mode. API mode calls only the same-origin `/api/dashboard/*` Vercel Functions and never silently falls back to fixtures.
+## Server configuration
 
-No independent dashboard testing API was found or verified in the dashboard or local middleware documentation. Consequently, the Vercel gateway is intentionally unconfigured by default and returns a safe `503 UPSTREAM_UNCONFIGURED` after server-side authentication. Do not configure the existing Zoho submission hostname or the live middleware as an upstream. See [the source-backed route comparison](API-CONTRACT-AUDIT.md).
+Set `DASHBOARD_UPSTREAM_BASE_URL=https://g11server.tailaff2e5.ts.net` and
+`DASHBOARD_UPSTREAM_TOKEN` to a dedicated dashboard read credential only in a separately
+authorized deployment. No testing-only mode is required. Missing origin or credential
+returns 503. The example file does not change production configuration.
 
-## Browser-facing dashboard gateway
+The gateway and middleware must support the same credential and preserve their existing
+organization boundary. Only these dashboard GET resources are forwarded:
 
-All routes are GET-only and protected by the server-side dashboard session and role allowlist:
+| Route                         | Parameters                                    | Schema in `src/features/api/schemas.ts` |
+| ----------------------------- | --------------------------------------------- | --------------------------------------- |
+| `/api/dashboard/overview`     | Required `createdFrom`, `createdTo`           | `dashboardOverviewSchema`               |
+| `/api/dashboard/invoices`     | Paging, search, dates and invoice filters     | `dashboardInvoicePageSchema`            |
+| `/api/dashboard/credit-notes` | Paging, search, dates and credit-note filters | `dashboardCreditNotePageSchema`         |
+| `/api/dashboard/services`     | None                                          | `dashboardServiceHealthSchema`          |
 
-| Route                                     | Response schema                        |
-| ----------------------------------------- | -------------------------------------- |
-| `/api/dashboard/capabilities`             | `dashboardCapabilitiesSchema`          |
-| `/api/dashboard/invoices`                 | `dashboardInvoicePageSchema`           |
-| `/api/dashboard/invoices/{requestId}`     | `dashboardInvoiceDetailSchema`         |
-| `/api/dashboard/credit-notes`             | `dashboardCreditNotePageSchema`        |
-| `/api/dashboard/credit-notes/{requestId}` | `dashboardCreditNoteDetailSchema`      |
-| `/api/dashboard/overview`                 | `dashboardOverviewSchema`              |
-| `/api/dashboard/writebacks`               | `dashboardWritebacksUnavailableSchema` |
-| `/api/dashboard/manual-review`            | `dashboardManualReviewSchema`          |
-| `/api/dashboard/reconciliation`           | `dashboardReconciliationSchema`        |
-| `/api/dashboard/device`                   | `dashboardDeviceDiagnosticsSchema`     |
-| `/api/dashboard/services`                 | `dashboardServiceHealthSchema`         |
+The server forwards JSON Accept, Bearer authorization and `X-Request-ID`, never browser
+cookies or user-supplied target hosts. Queries are validated, redirects rejected,
+responses bounded to 1 MiB, and JSON schema-validated. The upstream timeout is 8 seconds;
+the browser timeout is 10 seconds. Pagination uses integers (page 1–100000, size 1–100).
+Dates are ordered ISO datetimes with timezone, at most 366 days apart.
 
-The gateway validates filters, page bounds, date ranges and IDs, forwards only a fixed GET route allowlist, has an eight-second upstream timeout, rejects redirects, validates upstream bodies with Zod and returns normalized errors without forwarding upstream bodies. It accepts only an HTTPS origin and explicitly rejects `g11server.tailaff2e5.ts.net` and localhost. Its server-only upstream mode must be `DASHBOARD_DATA_MODE=testing-api` before any request is sent.
+## Unsupported resources
 
-The configured test service must implement this dashboard DTO contract (or a separately reviewed server adapter must map its verified response schemas). Middleware source comparison shows the device and service source DTOs differ from the dashboard DTOs; no values may be fabricated to fill those gaps. Writeback and reconciliation collection routes are explicitly unavailable/partial in that source.
+The manual-review UI reports unavailable without requesting the nonexistent collection.
+Its local demo fixtures remain available. Capabilities, device, writeback/reconciliation
+collections and document detail endpoints are outside this four-resource integration;
+the client rejects them without fetch. No replacement dashboard subsystems are added.
 
-### Query parameters
+Schemas are unchanged until actual desktop responses demonstrate a mismatch. In particular,
+verify the services/gateway fields against current middleware output. The historical
+`API-CONTRACT-AUDIT.md` does not establish current production compatibility.
 
-Invoice list: `page`, `pageSize`, `search`, `createdFrom`, `createdTo`, `status`, `transmissionStatus`, `reconciliationStatus`, `writebackStatus`.
+## Errors
 
-Credit-note list: `page`, `pageSize`, `search`, `createdFrom`, `createdTo`, `state`, `reconciliationState`, `writebackState`.
+Responses contain `{error:{code,message,requestId,upstreamStatus?}}` and `X-Request-ID`.
+Validated upstream request/correlation IDs and error codes are retained. Known disabled-auth
+errors have actionable messages. Raw upstream bodies and private diagnostic messages are
+not exposed. The client displays safe messages, codes and request IDs.
 
-Manual review: `page`, `pageSize`. Overview requires `createdFrom` and `createdTo`. Dates are ISO datetimes, ordered and no more than 366 days apart. Page size is capped at 100. Search is bounded. Sort fields are not accepted because the source route does not implement sorting.
+Upstream 400/404/429/503 retain their status. Upstream 401/403 become 502 so service-credential
+rejection does not expire the user's dashboard session. Unsupported methods return 405
+before any upstream fetch. Dashboard-session authentication behavior is unchanged.
 
-## Errors and provenance
+## Desktop integration tests
 
-Protected API errors use `{ "error": { "code": string, "message": string } }`. Expected statuses include 400 invalid parameters, 401 unauthenticated, 403 role not allowed, 404 absent route/record, 405 non-GET method, 502 unavailable or invalid upstream, and 503 unconfigured auth/upstream. Responses are `Cache-Control: no-store`.
+`api/_lib/dashboard-desktop.integration.test.ts` always targets `http://127.0.0.1:3004`.
+This exact HTTP origin is accepted only outside production and Vercel. Normal tests do
+not contact it. Supply `DASHBOARD_DESKTOP_TEST=1` and a dedicated desktop-only
+`DASHBOARD_DESKTOP_TEST_TOKEN` through the test process environment, then run:
 
-Data provenance is shown distinctly:
+```powershell
+npm.cmd test -- api/_lib/dashboard-desktop.integration.test.ts
+```
 
-- **DEMO:** local development fixtures only.
-- **TESTING API:** only after a separately verified non-production upstream is explicitly configured.
-- **UNAVAILABLE / UNKNOWN:** no reliable value is supplied. It is never replaced by a guessed value or sample record.
+Prerequisite: the matching desktop middleware is already running with isolated data,
+read authentication configured and execution/device workers disabled. Tests exercise the
+four resources, two pages, date filters, schema validation and missing/invalid credentials.
+No environment file is loaded or changed by these tests. Empty datasets cannot establish
+filter selectivity; known records inside/outside the window are required for that check.
 
-No dashboard API route can submit fiscalization, issue a receipt, retry/replay, mutate Zoho documents, resolve review cases, change reconciliation evidence or operate the G03 device.
+Normal regression tests cover dashboard sessions, service-header forwarding, rejected
+writes/unsupported resources and error correlation using fixture responses. They do not
+prove live middleware behavior. Device/fiscalization side-effect assertions also require
+spies on those services in the matching middleware tests; successful GETs alone are not proof.
+
+Production deployment requires separate authorization. Gateway/middleware implementation
+requires their matching source. The Zoho submission POST and G03/fiscalization logic are
+outside these dashboard changes.

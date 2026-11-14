@@ -38,7 +38,7 @@ describe('same-origin dashboard API client safety boundary', () => {
 
     expect(apiMode).toBe('api')
     await expect(
-      getJson('/api/dashboard/test', z.object({ ready: z.boolean() })),
+      getJson('/api/dashboard/services', z.object({ ready: z.boolean() })),
     ).rejects.toMatchObject({
       kind: 'configuration',
       message: 'Mock data mode is disabled in production. Configure VITE_DATA_MODE=api.',
@@ -56,7 +56,7 @@ describe('same-origin dashboard API client safety boundary', () => {
     controller.abort()
 
     await expect(
-      getJson('/api/dashboard/test', z.object({ ready: z.boolean() }), controller.signal),
+      getJson('/api/dashboard/services', z.object({ ready: z.boolean() }), controller.signal),
     ).rejects.toMatchObject({ kind: 'cancelled' })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
@@ -75,13 +75,13 @@ describe('same-origin dashboard API client safety boundary', () => {
     )
     const { getJson } = await import('./client')
 
-    await expect(getJson('/api/dashboard/test', z.object({ ready: z.boolean() }))).resolves.toEqual(
-      {
-        ready: true,
-      },
-    )
+    await expect(
+      getJson('/api/dashboard/services', z.object({ ready: z.boolean() })),
+    ).resolves.toEqual({
+      ready: true,
+    })
     expect(fetch).toHaveBeenCalledWith(
-      '/api/dashboard/test',
+      '/api/dashboard/services',
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
     )
   })
@@ -96,7 +96,7 @@ describe('same-origin dashboard API client safety boundary', () => {
     const { getJson } = await import('./client')
 
     await expect(
-      getJson('/api/dashboard/test', z.object({ ready: z.boolean() })),
+      getJson('/api/dashboard/services', z.object({ ready: z.boolean() })),
     ).rejects.toMatchObject({
       name: 'ApiError',
       message: 'Dashboard gateway returned HTTP 503.',
@@ -138,7 +138,7 @@ describe('same-origin dashboard API client safety boundary', () => {
     const { getJson } = await import('./client')
 
     await expect(
-      getJson('/api/dashboard/test', z.object({ ready: z.boolean() })),
+      getJson('/api/dashboard/services', z.object({ ready: z.boolean() })),
     ).rejects.toMatchObject({
       name: 'ApiError',
       message: 'Middleware response did not match the verified contract.',
@@ -155,11 +155,58 @@ describe('same-origin dashboard API client safety boundary', () => {
     const { getJson } = await import('./client')
 
     await expect(
-      getJson('/api/dashboard/test', z.object({ ready: z.boolean() })),
+      getJson('/api/dashboard/services', z.object({ ready: z.boolean() })),
     ).rejects.toMatchObject({
       name: 'ApiError',
       message: 'Dashboard gateway response was not valid JSON.',
       kind: 'contract',
     })
+  })
+
+  it('retains safe gateway messages, error codes and request IDs', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'DASHBOARD_AUTH_DISABLED',
+              message: 'Middleware dashboard authentication is disabled.',
+              requestId: 'middleware-123',
+            },
+          }),
+          { status: 503, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    )
+    const { getJson } = await import('./client')
+    await expect(
+      getJson('/api/dashboard/services', z.object({ ready: z.boolean() })),
+    ).rejects.toMatchObject({
+      status: 503,
+      code: 'DASHBOARD_AUTH_DISABLED',
+      requestId: 'middleware-123',
+      message:
+        'Middleware dashboard authentication is disabled. [DASHBOARD_AUTH_DISABLED] Request ID: middleware-123',
+    })
+  })
+
+  it.each([
+    'manual-review',
+    'capabilities',
+    'device',
+    'reconciliation',
+    'writebacks',
+    'invoices/123',
+  ])('never fetches unsupported resource %s', async (resource) => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const { getJson } = await import('./client')
+    await expect(getJson(`/api/dashboard/${resource}`, z.unknown())).rejects.toMatchObject({
+      kind: 'disabled',
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

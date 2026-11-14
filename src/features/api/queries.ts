@@ -231,11 +231,26 @@ export function useDashboardManualReviewQuery(
   enabled = true,
 ) {
   const query = { page: params.page ?? 1, pageSize: params.pageSize ?? 25 }
-  return useDashboardRead(
-    apiQueryKeys.dashboardManualReview(query),
-    buildDashboardManualReviewPath(query),
-    dashboardManualReviewSchema,
-    enabled,
+  // Preserve local fixture views without requesting a nonexistent backend route.
+  return withFreshness(
+    useQuery({
+      queryKey: apiQueryKeys.dashboardManualReview(query),
+      queryFn: ({ signal }) =>
+        localMockApiEnabled
+          ? getDashboardJson(
+              buildDashboardManualReviewPath(query),
+              dashboardManualReviewSchema,
+              signal,
+            )
+          : Promise.resolve(
+              dashboardManualReviewSchema.parse({
+                availability: 'unavailable',
+                reason: 'The middleware does not expose a standalone manual-review collection.',
+              }),
+            ),
+      ...queryOptions(enabled, true),
+      refetchInterval: localMockApiEnabled ? refreshIntervalMs : false,
+    }),
   )
 }
 

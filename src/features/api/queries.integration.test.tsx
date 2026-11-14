@@ -24,6 +24,26 @@ function createQueryWrapper(queryClient: QueryClient) {
 }
 
 describe('dashboard API query hooks', () => {
+  it('reports unavailable manual-review data without sending any request', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const { useDashboardManualReviewQuery } = await import('./queries')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result, unmount } = renderHook(
+      () => useDashboardManualReviewQuery({ page: 1, pageSize: 100 }),
+      {
+        wrapper: createQueryWrapper(queryClient),
+      },
+    )
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toMatchObject({ availability: 'unavailable' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+    unmount()
+    queryClient.clear()
+  })
+
   it('loads verified service status and exposes successful refresh time', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')

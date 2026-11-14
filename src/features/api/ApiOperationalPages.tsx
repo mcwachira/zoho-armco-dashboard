@@ -101,9 +101,8 @@ function Heading({
       )}
       {!localMockApiEnabled && (
         <div className="api-source-note" role="status">
-          API MODE · Data is read from the same-origin dashboard API. Source availability is
-          reported below; a separate testing API must be configured before operational records are
-          available.
+          Data is read through the authenticated dashboard gateway. Features without a supported
+          middleware resource are shown as unavailable.
         </div>
       )}
     </div>
@@ -183,7 +182,9 @@ function DataState({
   return null
 }
 
-export function statusBadgeTone(value: string | null | undefined): 'good' | 'bad' | 'warn' | 'neutral' {
+export function statusBadgeTone(
+  value: string | null | undefined,
+): 'good' | 'bad' | 'warn' | 'neutral' {
   const normalized = (value ?? 'unknown').toLowerCase()
   if (/unavailable|not[_ -]?available|fail|reject|error|conflict/.test(normalized)) return 'bad'
   if (/pending|progress|review|unknown|blocked|partial|not_configured|unverified/.test(normalized))

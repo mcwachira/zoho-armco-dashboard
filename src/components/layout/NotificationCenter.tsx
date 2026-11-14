@@ -122,7 +122,13 @@ export function NotificationCenter({
             <header className="notification-header">
               <div>
                 <h2>Notifications</h2>
-                <span>{unreadCount ? `${unreadCount} unread` : 'All caught up'}</span>
+                <span>
+                  {!isDemo
+                    ? 'Notification source unavailable'
+                    : unreadCount
+                      ? `${unreadCount} unread`
+                      : 'All caught up'}
+                </span>
               </div>
               <button
                 type="button"
@@ -140,7 +146,7 @@ export function NotificationCenter({
             )}
             {!isDemo && (
               <div className="notification-demo">
-                <span /> API SOURCE · PERSISTED MANUAL REVIEW · EVENT FEED UNAVAILABLE
+                <span /> MANUAL-REVIEW COLLECTION AND EVENT FEED UNAVAILABLE
               </div>
             )}
             {!isDemo && manualReviews.isLoading ? (

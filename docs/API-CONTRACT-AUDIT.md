@@ -1,5 +1,9 @@
 # Dashboard API contract audit
 
+> Historical audit: later production investigation confirmed no standalone manual-review
+> route, disabled dashboard authentication, and a public gateway serving only the Zoho POST.
+> The route matches below are not current production evidence. See [current integration](API-INTEGRATION.md).
+
 ## Evidence and scope
 
 The middleware source was inspected locally and read-only. Evidence includes `src/routes/dashboard-data-routes.ts`, its route schemas and normalization logic, `src/app.ts` route mounting and authorization middleware, `docs/openapi.yaml`, and `tests/unit/dashboard-data-routes.test.ts` plus `tests/unit/dashboard-app-security.test.ts` in the local middleware source repository. No runtime endpoint was called. No environment secret values were read. The deployed middleware, public gateway, Windows services, database and Zoho submission path were not changed.

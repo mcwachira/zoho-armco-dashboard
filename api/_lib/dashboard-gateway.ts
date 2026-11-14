@@ -1,20 +1,13 @@
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
-  dashboardCapabilitiesSchema,
-  dashboardCreditNoteDetailSchema,
   dashboardCreditNotePageSchema,
   dashboardCreditNoteQueryParamsSchema,
-  dashboardDeviceDiagnosticsSchema,
-  dashboardInvoiceDetailSchema,
   dashboardInvoicePageSchema,
   dashboardInvoiceQueryParamsSchema,
-  dashboardManualReviewQueryParamsSchema,
-  dashboardManualReviewSchema,
   dashboardOverviewQueryParamsSchema,
   dashboardOverviewSchema,
-  dashboardReconciliationSchema,
   dashboardServiceHealthSchema,
-  dashboardWritebacksUnavailableSchema,
 } from '../../src/features/api/schemas.js'
 import {
   requireDashboardSession,
@@ -36,47 +29,49 @@ export interface ApiResponse {
 
 const noQuery = z.object({}).strict()
 const endpointSchemas: Record<string, z.ZodType> = {
-  capabilities: dashboardCapabilitiesSchema,
   invoices: dashboardInvoicePageSchema,
   'credit-notes': dashboardCreditNotePageSchema,
   overview: dashboardOverviewSchema,
-  writebacks: dashboardWritebacksUnavailableSchema,
-  'manual-review': dashboardManualReviewSchema,
-  reconciliation: dashboardReconciliationSchema,
-  device: dashboardDeviceDiagnosticsSchema,
   services: dashboardServiceHealthSchema,
 }
 
 const querySchemas: Record<string, z.ZodType> = {
-  capabilities: noQuery,
   invoices: dashboardInvoiceQueryParamsSchema,
   'credit-notes': dashboardCreditNoteQueryParamsSchema,
   overview: dashboardOverviewQueryParamsSchema,
-  writebacks: noQuery,
-  'manual-review': dashboardManualReviewQueryParamsSchema,
-  reconciliation: noQuery,
-  device: noQuery,
   services: noQuery,
 }
 
-function send(res: ApiResponse, status: number, code: string, message: string) {
+function send(
+  res: ApiResponse,
+  status: number,
+  code: string,
+  message: string,
+  requestId: string,
+  upstreamStatus?: number,
+) {
   res.setHeader('Cache-Control', 'no-store')
-  return res.status(status).json({ error: { code, message } })
+  res.setHeader('X-Request-ID', requestId)
+  return res.status(status).json({ error: { code, message, requestId, upstreamStatus } })
 }
 
-function resolveUpstreamBase(raw: string | undefined): URL | null {
+function resolveUpstreamBase(env: Record<string, string | undefined>): URL | null {
+  const raw = env.DASHBOARD_UPSTREAM_BASE_URL
   if (!raw) return null
   try {
     const url = new URL(raw)
+    // The only HTTP exception is the explicitly configured desktop test server.
+    // Hosted functions and production processes must always use HTTPS.
+    const localIntegration =
+      env.NODE_ENV !== 'production' && !env.VERCEL && url.origin === 'http://127.0.0.1:3004'
     if (
-      url.protocol !== 'https:' ||
+      (url.protocol !== 'https:' && !localIntegration) ||
       url.username ||
       url.password ||
       url.pathname !== '/' ||
       url.search ||
       url.hash ||
-      url.hostname.toLowerCase() === 'g11server.tailaff2e5.ts.net' ||
-      /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname)
+      (!localIntegration && /^(localhost|127(?:\.\d{1,3}){3}|\[::1\])$/i.test(url.hostname))
     )
       return null
     return url
@@ -139,8 +134,12 @@ export async function handleDashboardRequest(
   res: ApiResponse,
   dependencies: GatewayDependencies = defaultDependencies,
 ) {
+  let requestId = randomUUID() as string
+  const reply = (status: number, code: string, message: string, upstreamStatus?: number) =>
+    send(res, status, code, message, requestId, upstreamStatus)
   res.setHeader('Cache-Control', 'no-store')
-  if (req.method !== 'GET') return send(res, 405, 'METHOD_NOT_ALLOWED', 'Only GET is supported.')
+  res.setHeader('X-Request-ID', requestId)
+  if (req.method !== 'GET') return reply(405, 'METHOD_NOT_ALLOWED', 'Only GET is supported.')
 
   const auth = await dependencies.authorize(req, res)
   if (!auth) return
@@ -148,55 +147,41 @@ export async function handleDashboardRequest(
   const requestUrl = new URL(req.url ?? '/', 'https://dashboard.invalid')
   const segments = requestUrl.pathname.split('/').filter(Boolean)
   if (segments[0] !== 'api' || segments[1] !== 'dashboard')
-    return send(res, 404, 'NOT_FOUND', 'Dashboard resource was not found.')
+    return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
   const parts = segments.slice(2)
-  const [resource, id, ...extra] = parts
-  if (!resource || extra.length || (id && !['invoices', 'credit-notes'].includes(resource)))
-    return send(res, 404, 'NOT_FOUND', 'Dashboard resource was not found.')
-
-  let decodedId = id
-  if (id) {
-    try {
-      decodedId = decodeURIComponent(id)
-    } catch {
-      return send(res, 400, 'INVALID_ID', 'The dashboard record identifier is invalid.')
-    }
-  }
-  const schema = id
-    ? resource === 'invoices'
-      ? dashboardInvoiceDetailSchema
-      : dashboardCreditNoteDetailSchema
-    : endpointSchemas[resource]
-  const querySchema = id ? noQuery : querySchemas[resource]
-  if (!schema || !querySchema)
-    return send(res, 404, 'NOT_FOUND', 'Dashboard resource was not found.')
+  const [resource] = parts
+  if (!resource || parts.length !== 1)
+    return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
+  const schema = Object.hasOwn(endpointSchemas, resource) ? endpointSchemas[resource] : undefined
+  const querySchema = Object.hasOwn(querySchemas, resource) ? querySchemas[resource] : undefined
+  if (!schema || !querySchema) return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
 
   const parsedQuery = parseQuery(requestUrl.searchParams)
-  if (!parsedQuery) return send(res, 400, 'INVALID_QUERY', 'Query parameters must not repeat.')
+  if (!parsedQuery) return reply(400, 'INVALID_QUERY', 'Query parameters must not repeat.')
   const normalizedQuery: Record<string, string | number> = { ...parsedQuery }
   for (const key of ['page', 'pageSize']) {
     if (normalizedQuery[key] === undefined) continue
     const numericValue = Number(normalizedQuery[key])
     if (!Number.isInteger(numericValue))
-      return send(res, 400, 'INVALID_QUERY', 'Query parameters are invalid.')
+      return reply(400, 'INVALID_QUERY', 'Query parameters are invalid.')
     normalizedQuery[key] = numericValue
   }
   const queryResult = querySchema.safeParse(normalizedQuery)
-  if (!queryResult.success) return send(res, 400, 'INVALID_QUERY', 'Query parameters are invalid.')
+  if (!queryResult.success) return reply(400, 'INVALID_QUERY', 'Query parameters are invalid.')
 
   // Keep route construction constrained to this fixed GET allowlist. No caller
   // supplied path is ever forwarded to an upstream service.
-  const route = id
-    ? `/api/dashboard/${resource}/${encodeURIComponent(decodedId ?? '')}`
-    : `/api/dashboard/${resource}`
-  if (decodedId && (decodedId.length > 100 || decodedId.includes('/') || decodedId.includes('\\')))
-    return send(res, 400, 'INVALID_ID', 'The dashboard record identifier is invalid.')
-
-  if (dependencies.env.DASHBOARD_DATA_MODE !== 'testing-api')
-    return send(res, 503, 'UPSTREAM_UNCONFIGURED', 'A verified testing API is not configured.')
-  const baseUrl = resolveUpstreamBase(dependencies.env.DASHBOARD_UPSTREAM_BASE_URL)
+  const route = `/api/dashboard/${resource}`
+  const baseUrl = resolveUpstreamBase(dependencies.env)
   if (!baseUrl)
-    return send(res, 503, 'UPSTREAM_UNCONFIGURED', 'A valid HTTPS testing API is not configured.')
+    return reply(503, 'UPSTREAM_UNCONFIGURED', 'Configure the HTTPS dashboard gateway origin.')
+  const token = dependencies.env.DASHBOARD_UPSTREAM_TOKEN?.trim()
+  if (!token || /\s/.test(token))
+    return reply(
+      503,
+      'UPSTREAM_UNCONFIGURED',
+      'Configure the dedicated dashboard service credential.',
+    )
 
   const target = new URL(route, baseUrl)
   for (const [key, value] of Object.entries(
@@ -213,41 +198,102 @@ export async function handleDashboardRequest(
       method: 'GET',
       headers: {
         Accept: 'application/json',
-        ...(dependencies.env.DASHBOARD_UPSTREAM_TOKEN
-          ? { Authorization: `Bearer ${dependencies.env.DASHBOARD_UPSTREAM_TOKEN}` }
-          : {}),
+        Authorization: `Bearer ${token}`,
+        'X-Request-ID': requestId,
       },
       signal: controller.signal,
       redirect: 'error',
     })
-    if (!upstream.ok)
-      return send(res, 502, 'UPSTREAM_UNAVAILABLE', 'The configured testing API is unavailable.')
+    const upstreamId =
+      upstream.headers.get('x-request-id') ?? upstream.headers.get('x-correlation-id')
+    const retainRequestId = (value: unknown) => {
+      if (
+        typeof value === 'string' &&
+        /^[A-Za-z0-9._:-]{1,128}$/.test(value) &&
+        !value.includes(token)
+      ) {
+        requestId = value
+        res.setHeader('X-Request-ID', requestId)
+      }
+    }
+    retainRequestId(upstreamId)
+    if (!upstream.ok) {
+      let code = 'UPSTREAM_UNAVAILABLE'
+      try {
+        const body = await readBoundedJson(upstream, 16_384)
+        const error = z
+          .object({
+            code: z.string().optional(),
+            requestId: z.string().optional(),
+            correlationId: z.string().optional(),
+            error: z
+              .union([
+                z.string(),
+                z.object({
+                  code: z.string().optional(),
+                  requestId: z.string().optional(),
+                  correlationId: z.string().optional(),
+                }),
+              ])
+              .optional(),
+          })
+          .safeParse(body)
+        const candidate = error.success
+          ? typeof error.data.error === 'string'
+            ? error.data.error
+            : (error.data.error?.code ?? error.data.code)
+          : undefined
+        if (!upstreamId && error.success) {
+          const nested = typeof error.data.error === 'object' ? error.data.error : undefined
+          retainRequestId(
+            nested?.requestId ??
+              nested?.correlationId ??
+              error.data.requestId ??
+              error.data.correlationId,
+          )
+        }
+        if (candidate && /^[A-Z][A-Z0-9_]{0,79}$/.test(candidate) && !candidate.includes(token))
+          code = candidate
+      } catch {
+        /* Do not expose arbitrary upstream bodies or internal diagnostics. */
+      }
+      const authFailure = upstream.status === 401 || upstream.status === 403
+      const status = authFailure
+        ? 502
+        : [400, 404, 429, 503].includes(upstream.status)
+          ? upstream.status
+          : 502
+      const message =
+        code === 'DASHBOARD_AUTH_DISABLED'
+          ? 'Middleware dashboard authentication is disabled.'
+          : authFailure
+            ? 'The middleware gateway rejected the dashboard service credential.'
+            : `The middleware gateway returned HTTP ${upstream.status}.`
+      return reply(status, code, message, upstream.status)
+    }
     let payload: unknown
     try {
       payload = await readBoundedJson(upstream)
     } catch {
-      return send(
-        res,
+      return reply(
         502,
         'UPSTREAM_CONTRACT_ERROR',
-        'The testing API returned an invalid response.',
+        'The middleware gateway returned invalid or oversized JSON.',
       )
     }
     const parsed = schema.safeParse(payload)
     if (!parsed.success)
-      return send(
-        res,
+      return reply(
         502,
         'UPSTREAM_CONTRACT_ERROR',
-        'The testing API response did not match the dashboard contract.',
+        'The middleware response did not match the dashboard contract.',
       )
     return res.status(200).json(parsed.data)
   } catch {
-    return send(
-      res,
+    return reply(
       502,
       'UPSTREAM_UNAVAILABLE',
-      'The configured testing API could not be reached.',
+      'The middleware gateway could not be reached or timed out.',
     )
   } finally {
     clearTimeout(timeout)
