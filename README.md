@@ -52,7 +52,10 @@ The actual application stack is React 19, TypeScript, Vite 8, React Router, TanS
 api/
   _lib/                 OIDC/session security and dashboard gateway
   auth/[...auth].ts     Google login, callback, session, logout
-  dashboard/[...path].ts Protected dashboard GET API
+  dashboard/overview.ts Date-bounded dashboard overview GET API
+  dashboard/invoices.ts Dashboard invoice collection GET API
+  dashboard/credit-notes.ts Dashboard credit-note collection GET API
+  dashboard/services.ts Dashboard service status GET API
 src/
   app/                  Application shell, route views, and UI tests
   components/layout/    Command palette, notifications, shared UX
