@@ -1,0 +1,61 @@
+.document-scope-note p {
+  margin: 0;
+}
+.document-controls {
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.document-filter-form,
+.document-lookup {
+  display: flex;
+  align-items: end;
+  gap: 12px;
+}
+.document-filter-form {
+  margin-bottom: 14px;
+}
+.document-search {
+  flex: 1;
+}
+.document-filter-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 14px;
+}
+.document-controls label,
+.document-lookup label {
+  display: grid;
+  gap: 6px;
+  color: #a9bac4;
+  font-size: 12px;
+}
+.document-controls input,
+.document-controls select,
+.document-lookup input {
+  width: 100%;
+  min-height: 36px;
+  padding: 7px 9px;
+  color: #dce2e7;
+  background: #121a20;
+  border: 1px solid #34414c;
+  border-radius: 5px;
+  color-scheme: dark;
+}
+.document-controls .api-note {
+  margin: 14px 0 0;
+  font-size: 11px;
+}
+.document-lookup {
+  margin-top: 16px;
+  padding: 16px;
+}
+.document-lookup label {
+  flex: 1;
+}
+@media (max-width: 620px) {
+  .document-filter-form,
+  .document-lookup {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
