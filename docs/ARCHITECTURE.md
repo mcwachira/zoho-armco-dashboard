@@ -1,21 +1,48 @@
 # Dashboard architecture
 
+This is a dashboard-only repository: React 19 / TypeScript / Vite 8, React Router,
+TanStack Query, Zod, Recharts, Framer Motion, Lucide and the existing dark design
+system. `src/main.tsx` starts the application; `src/app/App.tsx` owns protected
+routes and navigation. Vercel serves the SPA and static Node API handlers.
+
 ```mermaid
 flowchart LR
-  Browser[Browser · Vite/React SPA] -->|same-origin GET /api/dashboard/* · HttpOnly session cookie| API[Vercel Dashboard Functions]
-  Browser -->|GET /api/auth/* · top-level OIDC redirects| Auth[Dashboard Google OIDC boundary]
-  API --> Auth
-  API -->|only when configured: server-side HTTPS GET, allowlisted routes, Zod validation| TestAPI[Independent testing API · not yet verified]
-  TestAPI -. unavailable until configured .-> API
-  LiveMiddleware[Existing Windows middleware]:::out
-  ExistingGateway[Existing public Zoho gateway/Funnel]:::out
-  API -. no connection .-> LiveMiddleware
-  ExistingGateway -. Zoho button submissions only; unchanged .-> LiveMiddleware
-  classDef out fill:#222,stroke:#777,color:#aaa,stroke-dasharray: 5 5
+  Browser[Dashboard browser] -->|same-origin session cookie| API[Dashboard static API handlers]
+  API -->|GET with server service bearer| Gateway[Configured public gateway]
+  Gateway --> Middleware[Middleware on separate server]
+  API --> Auth[Dashboard Google OIDC session validation]
+  API -. blocked pending documented operator session bridge .-> Actions[Middleware Better Auth operational POSTs]
 ```
 
-The frontend is a standalone Vite/React SPA. Vercel serves the static build and Node serverless functions. The browser calls only same-origin dashboard APIs. Functions enforce the dashboard session and role, then optionally call the configured independent testing API with fixed GET routes. Upstream URL/token values remain server-side.
+The configured origin is `DASHBOARD_UPSTREAM_BASE_URL`; its GET credential is
+`DASHBOARD_UPSTREAM_TOKEN`. Neither is exposed through Vite environment variables.
+The browser, dashboard and tests do not connect to middleware persistence,
+Zoho Books, G03, ZFPLabServer or a middleware filesystem. The authoritative local
+reference is [dashboard-api-contract.md](dashboard-api-contract.md).
 
-Local development uses explicitly selected local fixtures. Production rejects mock mode, never falls back to fixtures, and returns safe unavailable errors when auth or upstream settings are missing. The current mission did not verify an independent testing API, so the server-side upstream is left inactive.
+All dashboard routes use static files. Detail identifiers are strict query
+parameters on the dashboard and encoded path segments upstream. No dashboard
+catch-all is present; the SPA fallback excludes `/api`. Compatibility routes
+for unsupported health/metrics/writeback detail reads return explicit errors.
+System health uses the documented `/api/dashboard/services` endpoint.
 
-The dashboard is monitoring-only. It does not call the existing Zoho submission gateway, middleware, PostgreSQL, Zoho APIs or G03 hardware. The local middleware source has a dedicated dashboard route set, but its existence does not prove an independent test deployment. See [contract audit](API-CONTRACT-AUDIT.md).
+GET routes require a valid local session; upstream GETs use only the server
+service bearer. Operational POST handlers validate local operator/admin sessions,
+origin, query and body, then return `OPERATOR_SESSION_UNAVAILABLE` because the
+contract does not document how to establish/forward the distinct middleware
+Better Auth operator session. The GET bearer never authorizes a POST.
+
+Existing strict DTOs are retained for persisted invoice/credit-note requests,
+overview, services, capabilities and device data. The explicitly defined
+writeback-operation page DTO is implemented. New document/manual-review/
+reconciliation/events/pending-operation DTOs omitted by the local contract remain
+explicit errors rather than permissive JSON, invented records or empty success.
+Existing DTO compatibility with deployed middleware remains unverified.
+
+Local Vite demo mode requires explicit fixture and mock-auth settings. Production
+rejects mock mode and never substitutes fixtures after a transport or contract
+failure. Logout clears protected cookies and client caches; shared persistent
+revocation of previously copied stateless cookies is not implemented.
+
+See [implementation report](IMPLEMENTATION-REPORT.md), [gateway review](gateway-review.md)
+and [security review](SECURITY-REVIEW.md) for scope, mapping and limitations.

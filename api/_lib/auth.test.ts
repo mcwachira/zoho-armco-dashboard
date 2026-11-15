@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { generateKeyPairSync, sign } from 'node:crypto'
+import { createHmac, generateKeyPairSync, sign } from 'node:crypto'
 import authHandler from '../auth/[...auth]'
 import {
   authorizeDashboardRequest,
@@ -244,6 +244,12 @@ describe('Vercel Google OIDC auth boundary', () => {
     expect(res.headers.location).toBe('https://dashboard.example.test/overview')
     const sessionCookie = cookieFrom(res.headers['set-cookie'], '__Host-dashboard_session')
     expect(sessionCookie).toBeTruthy()
+    const issuedCookies = res.headers['set-cookie'] as string[]
+    const issuedSessionCookie = issuedCookies.find((cookie) =>
+      cookie.startsWith('__Host-dashboard_session='),
+    )!
+    expect(issuedSessionCookie).toContain('; Path=/; Max-Age=28800; HttpOnly; SameSite=Lax; Secure')
+    expect(issuedSessionCookie).not.toContain('Domain=')
     const sessionResponse = responseMock()
     await authHandler(
       request('GET', '/api/auth/session', {
@@ -290,6 +296,52 @@ describe('Vercel Google OIDC auth boundary', () => {
     expect(rejected.status()).toBe(401)
   })
 
+  it.each([
+    ['expired', 'viewer', -1, false, 401],
+    ['tampered', 'viewer', 60_000, true, 401],
+    ['changed role', 'operator', 60_000, false, 403],
+  ] as const)(
+    'rejects a %s session on protected API and session reads',
+    async (_, role, ttl, tamper, status) => {
+      configure()
+      const value = Buffer.from(
+        JSON.stringify({ email: 'reader@example.test', role, expiresAt: Date.now() + ttl }),
+      ).toString('base64url')
+      const signature = createHmac('sha256', secret).update(value).digest('base64url')
+      const cookie = `__Host-dashboard_session=${value}.${tamper ? `invalid-${signature}` : signature}`
+      expect(
+        authorizeDashboardRequest(request('GET', '/api/dashboard/services', { cookie })),
+      ).toMatchObject({ ok: false, status })
+      const res = responseMock()
+      await authHandler(request('GET', '/api/auth/session', { cookie }), res.response)
+      expect(res.status()).toBe(401)
+      expect(res.headers['cache-control']).toBe('no-store')
+      expect(res.body()).not.toContain('reader@example.test')
+    },
+  )
+
+  it('rejects an existing session immediately when its email is removed from the allowlist', async () => {
+    configure()
+    const value = Buffer.from(
+      JSON.stringify({
+        email: 'reader@example.test',
+        role: 'viewer',
+        expiresAt: Date.now() + 60_000,
+      }),
+    ).toString('base64url')
+    const cookie = `__Host-dashboard_session=${value}.${createHmac('sha256', secret).update(value).digest('base64url')}`
+    expect(
+      authorizeDashboardRequest(request('GET', '/api/dashboard/services', { cookie })),
+    ).toMatchObject({ ok: true })
+    process.env.DASHBOARD_ALLOWED_USERS = JSON.stringify({ 'another@example.test': 'viewer' })
+    expect(
+      authorizeDashboardRequest(request('GET', '/api/dashboard/services', { cookie })),
+    ).toMatchObject({ ok: false, status: 403 })
+    const res = responseMock()
+    await authHandler(request('GET', '/api/auth/session', { cookie }), res.response)
+    expect(res.status()).toBe(401)
+  })
+
   it('requires same-origin POST logout and clears both cookies', async () => {
     configure()
     const rejected = responseMock()
@@ -306,4 +358,69 @@ describe('Vercel Google OIDC auth boundary', () => {
     expect(accepted.status()).toBe(204)
     expect(accepted.headers['set-cookie']).toHaveLength(2)
   })
+
+  it('expires the host-only session cookies and rejects subsequent browser session/API reads', async () => {
+    configure()
+    const value = Buffer.from(
+      JSON.stringify({
+        email: 'reader@example.test',
+        role: 'viewer',
+        expiresAt: Date.now() + 60_000,
+      }),
+    ).toString('base64url')
+    const signedCookie = `__Host-dashboard_session=${value}.${createHmac('sha256', secret).update(value).digest('base64url')}`
+    expect(
+      authorizeDashboardRequest(
+        request('GET', '/api/dashboard/services', { cookie: signedCookie }),
+      ),
+    ).toMatchObject({ ok: true })
+    const signedIn = responseMock()
+    await authHandler(
+      request('GET', '/api/auth/session', { cookie: signedCookie }),
+      signedIn.response,
+    )
+    expect(signedIn.status()).toBe(200)
+
+    const logout = responseMock()
+    await authHandler(
+      request('POST', '/api/auth/logout', {
+        cookie: signedCookie,
+        origin: 'https://dashboard.example.test',
+      }),
+      logout.response,
+    )
+    expect(logout.status()).toBe(204)
+    expect(logout.headers['cache-control']).toBe('no-store')
+    expect(logout.headers['set-cookie']).toEqual([
+      '__Host-dashboard_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure',
+      '__Host-dashboard_oauth=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax; Secure',
+    ])
+    // A browser applies Max-Age=0 by deleting these host-only cookies.
+    const signedOut = responseMock()
+    await authHandler(request('GET', '/api/auth/session'), signedOut.response)
+    expect(signedOut.status()).toBe(401)
+    const api = responseMock()
+    expect(
+      requireDashboardSession(request('GET', '/api/dashboard/services'), api.response),
+    ).toBeNull()
+    expect(api.status()).toBe(401)
+  })
+
+  it.each([
+    ['GET', 'https://dashboard.example.test', 405],
+    ['POST', undefined, 403],
+    ['POST', 'https://evil.example.test', 403],
+  ])(
+    'does not clear cookies for invalid logout method/origin: %s %s',
+    async (method, origin, status) => {
+      configure()
+      const response = responseMock()
+      await authHandler(
+        request(method as string, '/api/auth/logout', origin ? { origin: String(origin) } : {}),
+        response.response,
+      )
+      expect(response.status()).toBe(status)
+      expect(response.headers['set-cookie']).toBeUndefined()
+    },
+  )
 })

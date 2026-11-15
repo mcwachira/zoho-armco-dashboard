@@ -10,7 +10,27 @@ const encodedDates =
   'createdFrom=2026-11-13T04%3A30%3A17.469Z&createdTo=2026-11-14T04%3A30%3A17.469Z'
 const sessionSecret = 'routing-test-only-session-signing-secret'
 const serviceCredential = 'routing-test-only-service-credential'
-const resources = ['credit-notes', 'invoices', 'overview', 'services']
+const resources = [
+  'capabilities',
+  'credit-note',
+  'credit-notes',
+  'device',
+  'events',
+  'health',
+  'invoice',
+  'invoices',
+  'manual-review',
+  'manual-review-case',
+  'operations',
+  'overview',
+  'reconciliation',
+  'request',
+  'requests',
+  'services',
+  'telemetry',
+  'writeback',
+  'writebacks',
+].sort()
 const cases = [
   { resource: 'overview', query: encodedDates, payload: mockOverview(createdFrom, createdTo) },
   {
@@ -86,14 +106,21 @@ afterEach(() => {
 })
 
 describe('Vercel dashboard filesystem routes', () => {
-  it('uses four static entry points without dynamic route query injection', () => {
+  it('uses static entry points without dynamic route query injection', () => {
     // Plain Vercel Node routing adds bracketed filename segments to req.url's
     // query. [...path].ts produces ?...path=<resource>, not Next.js catch-all
     // semantics. Static filenames must stay in place to avoid this regression.
     const files = readdirSync(new URL('../dashboard/', import.meta.url))
       .filter((file) => file.endsWith('.ts'))
       .sort()
-    expect(files).toEqual(resources.map((resource) => `${resource}.ts`))
+    expect(files).toEqual(resources.map((resource) => `${resource}.ts`).sort())
+    for (const directory of ['actions', 'documents']) {
+      expect(
+        readdirSync(new URL(`../dashboard/${directory}/`, import.meta.url)).every(
+          (file) => !file.includes('['),
+        ),
+      ).toBe(true)
+    }
   })
 
   describe.each([
@@ -125,7 +152,9 @@ describe('Vercel dashboard filesystem routes', () => {
         expect(upstream).toHaveBeenCalledOnce()
         const [target, options] = upstream.mock.calls[0]!
         expect(target.toString()).toBe(
-          `https://g11server.tailaff2e5.ts.net/api/dashboard/${resource}${query ? `?${query}` : ''}`,
+          resource === 'health'
+            ? 'https://g11server.tailaff2e5.ts.net/health/live'
+            : `https://g11server.tailaff2e5.ts.net/api/dashboard/${resource}${query ? `?${query}` : ''}`,
         )
         expect(options).toMatchObject({
           method: 'GET',
@@ -134,7 +163,7 @@ describe('Vercel dashboard filesystem routes', () => {
         })
         expect(options.headers.Cookie).toBeUndefined()
         expect(options.headers.cookie).toBeUndefined()
-        if (query) {
+        if (query && resource !== 'health') {
           expect(target.searchParams.get('createdFrom')).toBe(createdFrom)
           expect(target.searchParams.get('createdTo')).toBe(createdTo)
         }

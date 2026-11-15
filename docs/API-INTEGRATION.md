@@ -1,76 +1,74 @@
-# Dashboard middleware integration
+# Dashboard gateway integration
 
-Browser → dashboard server → authenticated public gateway → middleware dashboard API.
-Existing Google login, session cookies and the role allowlist protect browser reads.
-No middleware credential is sent to the browser. Vite development remains fixture-only.
+The authoritative integration reference is the complete local
+[dashboard-api-contract.md](dashboard-api-contract.md). Middleware source is on
+another machine and was not inspected. Historical source-audit documents do not
+override this contract. The production origin and environment configuration were
+not changed.
 
-## Server configuration
+Browser ? authenticated static dashboard API ? public gateway ? middleware.
+`DASHBOARD_UPSTREAM_BASE_URL` and `DASHBOARD_UPSTREAM_TOKEN` remain server-only.
+All integration paths are fixed; no browser-provided origin or authorization is
+accepted. The complete route/authentication table is in
+[gateway-review.md](gateway-review.md).
 
-Set `DASHBOARD_UPSTREAM_BASE_URL=https://g11server.tailaff2e5.ts.net` and
-`DASHBOARD_UPSTREAM_TOKEN` to a dedicated dashboard read credential only in a separately
-authorized deployment. No testing-only mode is required. Missing origin or credential
-returns 503. The example file does not change production configuration.
+## Reads
 
-The gateway and middleware must support the same credential and preserve their existing
-organization boundary. Only these dashboard GET resources are forwarded:
+Overview, persisted invoice/credit-note requests, their detail endpoints,
+services, capabilities and device reads reuse the project's strict DTOs.
+Writebacks use the explicit `{ page, pageSize, total, items }` contract including
+independent retry/provider-exchange counts and nullable timestamps.
 
-| Route                         | Parameters                                    | Schema in `src/features/api/schemas.ts` |
-| ----------------------------- | --------------------------------------------- | --------------------------------------- |
-| `/api/dashboard/overview`     | Required `createdFrom`, `createdTo`           | `dashboardOverviewSchema`               |
-| `/api/dashboard/invoices`     | Paging, search, dates and invoice filters     | `dashboardInvoicePageSchema`            |
-| `/api/dashboard/credit-notes` | Paging, search, dates and credit-note filters | `dashboardCreditNotePageSchema`         |
-| `/api/dashboard/services`     | None                                          | `dashboardServiceHealthSchema`          |
+Dashboard details use `/api/dashboard/invoice?id=...` and
+`/api/dashboard/credit-note?id=...`, mapped to middleware
+`/api/dashboard/invoices/{requestId}` and
+`/api/dashboard/credit-notes/{requestId}`. These are request IDs, distinct from
+Zoho document IDs on `/api/dashboard/documents/*`.
 
-The server forwards JSON Accept, Bearer authorization and `X-Request-ID`, never browser
-cookies or user-supplied target hosts. Queries are validated, redirects rejected,
-responses bounded to 1 MiB, and JSON schema-validated. The upstream timeout is 8 seconds;
-the browser timeout is 10 seconds. Pagination uses integers (page 1–100000, size 1–100).
-Dates are ordered ISO datetimes with timezone, at most 366 days apart.
+All GET forwarding uses the dedicated service bearer. The local session cookie
+and caller authorization are never forwarded upstream. Pagination, filters,
+response schemas and response/request identity are checked. New read models whose
+DTOs are absent from the contract fail with `CONTRACT_SCHEMA_UNAVAILABLE`; their
+presence in the contract is acknowledged and their records are not fabricated.
 
-## Unsupported resources
+Manual-review, reconciliation, derived events and pending-operation collections
+have page cap 100. Live document page size is at most 200. Zoho totals remain
+unknown (`total: null` and authoritative `hasMore`) and are not inferred from
+loaded pages. Zoho filtering cannot constrain middleware-only state; persisted
+request history provides supported middleware-state filters separately.
 
-The manual-review UI reports unavailable without requesting the nonexistent collection.
-Its local demo fixtures remain available. Capabilities, device, writeback/reconciliation
-collections and document detail endpoints are outside this four-resource integration;
-the client rejects them without fetch. No replacement dashboard subsystems are added.
+## Operations
 
-Schemas are unchanged until actual desktop responses demonstrate a mismatch. In particular,
-verify the services/gateway fields against current middleware output. The historical
-`API-CONTRACT-AUDIT.md` does not establish current production compatibility.
+Exactly three middleware action mappings exist:
 
-## Errors
+- `actions/fiscalize` ? `POST /api/dashboard/actions/fiscalize` with only
+  `org_id`, `document_type`, `document_id`, `source`.
+- `actions/invoice-writeback?id=...` ?
+  `POST /api/dashboard/actions/invoices/{requestId}/writeback`, empty body.
+- `actions/credit-note-writeback?id=...` ?
+  `POST /api/dashboard/actions/credit-notes/{requestId}/writeback`, empty body.
 
-Responses contain `{error:{code,message,requestId,upstreamStatus?}}` and `X-Request-ID`.
-Validated upstream request/correlation IDs and error codes are retained. Known disabled-auth
-errors have actionable messages. Raw upstream bodies and private diagnostic messages are
-not exposed. The client displays safe messages, codes and request IDs.
+All require a local operator/admin session and same-origin request. The middleware
+requires its own Better Auth session with `dashboard:operate`. Its session bridge,
+cookie-forwarding protocol and complete action response DTOs are absent from the
+contract. Handlers therefore fail closed after request validation. They do not
+substitute the GET bearer, forward the custom local cookie or invoke device logic.
+These actions are not claimed as complete.
 
-Upstream 400/404/429/503 retain their status. Upstream 401/403 become 502 so service-credential
-rejection does not expire the user's dashboard session. Unsupported methods return 405
-before any upstream fetch. Dashboard-session authentication behavior is unchanged.
+## Errors and boundaries
 
-## Desktop integration tests
+Strict query validation rejects duplicates, unknown keys, invalid pagination,
+invalid identifiers and date ranges. Upstream requests reject redirects, bound
+response bodies and have an eight-second timeout; browser reads use ten seconds,
+`cache: no-store` and `redirect: error`. APIs send `Cache-Control: no-store`.
+Service-credential rejection retains upstream status context without expiring a
+valid local dashboard session. Sensitive raw upstream errors and credentials are
+not returned. Failed transport and schema checks remain errors.
 
-`api/_lib/dashboard-desktop.integration.test.ts` always targets `http://127.0.0.1:3004`.
-This exact HTTP origin is accepted only outside production and Vercel. Normal tests do
-not contact it. Supply `DASHBOARD_DESKTOP_TEST=1` and a dedicated desktop-only
-`DASHBOARD_DESKTOP_TEST_TOKEN` through the test process environment, then run:
+No undocumented integration GET routes, direct database/provider/device access,
+production actions, fallback fixture results or production configuration changes
+are introduced. The legacy health/telemetry/writeback-detail handlers report
+explicit contract-route errors; the active health UI reads `/services`.
 
-```powershell
-npm.cmd test -- api/_lib/dashboard-desktop.integration.test.ts
-```
-
-Prerequisite: the matching desktop middleware is already running with isolated data,
-read authentication configured and execution/device workers disabled. Tests exercise the
-four resources, two pages, date filters, schema validation and missing/invalid credentials.
-No environment file is loaded or changed by these tests. Empty datasets cannot establish
-filter selectivity; known records inside/outside the window are required for that check.
-
-Normal regression tests cover dashboard sessions, service-header forwarding, rejected
-writes/unsupported resources and error correlation using fixture responses. They do not
-prove live middleware behavior. Device/fiscalization side-effect assertions also require
-spies on those services in the matching middleware tests; successful GETs alone are not proof.
-
-Production deployment requires separate authorization. Gateway/middleware implementation
-requires their matching source. The Zoho submission POST and G03/fiscalization logic are
-outside these dashboard changes.
+See [middleware dependencies](MIDDLEWARE-DEPENDENCIES.md) for precise contract gaps,
+and [implementation report](IMPLEMENTATION-REPORT.md) for verification.

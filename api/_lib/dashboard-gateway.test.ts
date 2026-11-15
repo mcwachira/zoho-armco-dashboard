@@ -167,24 +167,43 @@ describe('read-only Vercel dashboard gateway', () => {
   })
 
   it.each([
-    'manual-review',
-    'device',
-    'capabilities',
-    'writebacks',
-    'reconciliation',
-    'invoices/123',
-    'constructor',
-  ])('does not forward unsupported resource %s', async (resource) => {
-    const fetch = vi.fn()
-    const res = responseMock()
-    await handleDashboardRequest(
-      request('GET', `/api/dashboard/${resource}`),
-      res.response as never,
-      deps({ fetch }),
-    )
-    expect(res.status()).toBe(404)
-    expect(fetch).not.toHaveBeenCalled()
-  })
+    {},
+    { DASHBOARD_UPSTREAM_BASE_URL: '' },
+    { DASHBOARD_UPSTREAM_URL: 'https://g11server.tailaff2e5.ts.net' },
+    { DASHBOARD_UPSTREAM_BASE_URL: 'http://g11server.tailaff2e5.ts.net' },
+    { DASHBOARD_UPSTREAM_BASE_URL: 'https://g11server.tailaff2e5.ts.net/api/dashboard' },
+    { DASHBOARD_UPSTREAM_BASE_URL: 'https://g11server.tailaff2e5.ts.net?context=dashboard' },
+  ])(
+    'reports the origin configuration error before upstream authentication for invalid settings %#',
+    async (env) => {
+      const fetch = vi.fn()
+      const res = responseMock()
+      await handleDashboardRequest(request(), res.response as never, deps({ fetch, env }))
+      expect(res.status()).toBe(503)
+      expect(res.body()).toMatchObject({
+        error: {
+          code: 'UPSTREAM_UNCONFIGURED',
+          message: 'Configure the HTTPS dashboard gateway origin.',
+        },
+      })
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['invoices/123', 'constructor'])(
+    'does not forward unsupported resource %s',
+    async (resource) => {
+      const fetch = vi.fn()
+      const res = responseMock()
+      await handleDashboardRequest(
+        request('GET', `/api/dashboard/${resource}`),
+        res.response as never,
+        deps({ fetch }),
+      )
+      expect(res.status()).toBe(404)
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
 
   const dateQuery =
     'createdFrom=2026-11-06T12%3A00%3A00.000Z&createdTo=2026-11-13T12%3A00%3A00.000Z'

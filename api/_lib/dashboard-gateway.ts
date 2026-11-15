@@ -1,14 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import {
-  dashboardCreditNotePageSchema,
-  dashboardCreditNoteQueryParamsSchema,
-  dashboardInvoicePageSchema,
-  dashboardInvoiceQueryParamsSchema,
-  dashboardOverviewQueryParamsSchema,
-  dashboardOverviewSchema,
-  dashboardServiceHealthSchema,
-} from '../../src/features/api/schemas.js'
+import { dashboardActionRoutes, dashboardReadRoutes } from './dashboard-contracts.js'
 import {
   requireDashboardSession,
   type DashboardSession,
@@ -19,27 +11,13 @@ import {
 export interface ApiRequest {
   url?: string
   method?: string
+  body?: unknown
   headers: Record<string, string | string[] | undefined>
 }
 export interface ApiResponse {
   status: (code: number) => ApiResponse
   json: (body: unknown) => void
   setHeader: (name: string, value: string | string[]) => ApiResponse
-}
-
-const noQuery = z.object({}).strict()
-const endpointSchemas: Record<string, z.ZodType> = {
-  invoices: dashboardInvoicePageSchema,
-  'credit-notes': dashboardCreditNotePageSchema,
-  overview: dashboardOverviewSchema,
-  services: dashboardServiceHealthSchema,
-}
-
-const querySchemas: Record<string, z.ZodType> = {
-  invoices: dashboardInvoiceQueryParamsSchema,
-  'credit-notes': dashboardCreditNoteQueryParamsSchema,
-  overview: dashboardOverviewQueryParamsSchema,
-  services: noQuery,
 }
 
 function send(
@@ -139,39 +117,59 @@ export async function handleDashboardRequest(
     send(res, status, code, message, requestId, upstreamStatus)
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Request-ID', requestId)
-  if (req.method !== 'GET') return reply(405, 'METHOD_NOT_ALLOWED', 'Only GET is supported.')
+  if (req.method !== 'GET') {
+    res.setHeader('Allow', 'GET')
+    return reply(405, 'METHOD_NOT_ALLOWED', 'Only GET is supported.')
+  }
 
   const auth = await dependencies.authorize(req, res)
   if (!auth) return
 
-  const requestUrl = new URL(req.url ?? '/', 'https://dashboard.invalid')
+  let requestUrl: URL
+  try {
+    requestUrl = new URL(req.url ?? '/', 'https://dashboard.invalid')
+  } catch {
+    return reply(400, 'INVALID_QUERY', 'The dashboard request URL is invalid.')
+  }
   const segments = requestUrl.pathname.split('/').filter(Boolean)
   if (segments[0] !== 'api' || segments[1] !== 'dashboard')
     return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
-  const parts = segments.slice(2)
-  const [resource] = parts
-  if (!resource || parts.length !== 1)
-    return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
-  const schema = Object.hasOwn(endpointSchemas, resource) ? endpointSchemas[resource] : undefined
-  const querySchema = Object.hasOwn(querySchemas, resource) ? querySchemas[resource] : undefined
-  if (!schema || !querySchema) return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
+  const resource = segments.slice(2).join('/')
+  const definition = Object.hasOwn(dashboardReadRoutes, resource)
+    ? dashboardReadRoutes[resource]
+    : undefined
+  if (!definition) return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
 
   const parsedQuery = parseQuery(requestUrl.searchParams)
   if (!parsedQuery) return reply(400, 'INVALID_QUERY', 'Query parameters must not repeat.')
   const normalizedQuery: Record<string, string | number> = { ...parsedQuery }
   for (const key of ['page', 'pageSize']) {
     if (normalizedQuery[key] === undefined) continue
-    const numericValue = Number(normalizedQuery[key])
-    if (!Number.isInteger(numericValue))
+    // Accept decimal integers only. Number() alone also accepts whitespace,
+    // exponents and hexadecimal values that are not valid pagination inputs.
+    const rawValue = normalizedQuery[key]
+    if (typeof rawValue !== 'string' || !/^\d+$/.test(rawValue))
+      return reply(400, 'INVALID_QUERY', 'Query parameters are invalid.')
+    const numericValue = Number(rawValue)
+    if (!Number.isSafeInteger(numericValue))
       return reply(400, 'INVALID_QUERY', 'Query parameters are invalid.')
     normalizedQuery[key] = numericValue
   }
-  const queryResult = querySchema.safeParse(normalizedQuery)
+  const queryResult = definition.query.safeParse(normalizedQuery)
   if (!queryResult.success) return reply(400, 'INVALID_QUERY', 'Query parameters are invalid.')
+
+  if (definition.unavailable)
+    return reply(
+      503,
+      definition.unavailableCode ?? 'CONTRACT_SCHEMA_UNAVAILABLE',
+      definition.unavailable,
+    )
+  const schema = definition.response!
 
   // Keep route construction constrained to this fixed GET allowlist. No caller
   // supplied path is ever forwarded to an upstream service.
-  const route = `/api/dashboard/${resource}`
+  const id = (queryResult.data as { id?: string }).id
+  const route = definition.path.replace('{id}', encodeURIComponent(id ?? ''))
   const baseUrl = resolveUpstreamBase(dependencies.env)
   if (!baseUrl)
     return reply(503, 'UPSTREAM_UNCONFIGURED', 'Configure the HTTPS dashboard gateway origin.')
@@ -187,7 +185,7 @@ export async function handleDashboardRequest(
   for (const [key, value] of Object.entries(
     queryResult.data as Record<string, string | number | undefined>,
   )) {
-    if (value === undefined) continue
+    if (value === undefined || key === 'id' || key === 'check') continue
     target.searchParams.set(key, String(value))
   }
 
@@ -258,11 +256,7 @@ export async function handleDashboardRequest(
         /* Do not expose arbitrary upstream bodies or internal diagnostics. */
       }
       const authFailure = upstream.status === 401 || upstream.status === 403
-      const status = authFailure
-        ? 502
-        : [400, 404, 429, 503].includes(upstream.status)
-          ? upstream.status
-          : 502
+      const status = authFailure ? 502 : upstream.status >= 400 ? upstream.status : 502
       const message =
         code === 'DASHBOARD_AUTH_DISABLED'
           ? 'Middleware dashboard authentication is disabled.'
@@ -288,7 +282,42 @@ export async function handleDashboardRequest(
         'UPSTREAM_CONTRACT_ERROR',
         'The middleware response did not match the dashboard contract.',
       )
-    return res.status(200).json(parsed.data)
+    const responseRecord = parsed.data as { request?: { requestId: string } }
+    if (definition.detail && responseRecord.request?.requestId !== id)
+      return reply(
+        502,
+        'UPSTREAM_CONTRACT_ERROR',
+        'The middleware response did not match the requested resource.',
+      )
+    const requestedPage = queryResult.data as { page?: number; pageSize?: number }
+    const returnedPage = parsed.data as {
+      page?: number
+      pageSize?: number
+      total?: number
+      items?: unknown[]
+    }
+    if (
+      requestedPage.page !== undefined &&
+      (returnedPage.page !== requestedPage.page ||
+        returnedPage.pageSize !== requestedPage.pageSize ||
+        !Array.isArray(returnedPage.items) ||
+        returnedPage.items.length > (returnedPage.pageSize ?? 0) ||
+        (typeof returnedPage.total === 'number' && returnedPage.items.length > returnedPage.total))
+    )
+      return reply(
+        502,
+        'UPSTREAM_CONTRACT_ERROR',
+        'The middleware pagination did not match the requested page.',
+      )
+    // A schema-valid response must still never echo the server-held credential.
+    // Fail closed instead of returning a partially redacted operational record.
+    if (JSON.stringify(parsed.data).includes(token))
+      return reply(
+        502,
+        'UPSTREAM_CONTRACT_ERROR',
+        'The middleware response contained protected authentication data.',
+      )
+    return res.status(upstream.status).json(parsed.data)
   } catch {
     return reply(
       502,
@@ -298,4 +327,73 @@ export async function handleDashboardRequest(
   } finally {
     clearTimeout(timeout)
   }
+}
+
+/**
+ * Dashboard mutations require two separate sessions. Local OIDC authenticates
+ * the dashboard operator; it is not a middleware Better Auth session. Until the
+ * authoritative contract defines a session bridge, these routes fail closed.
+ * In particular, the GET-only service bearer must never be sent for a POST.
+ */
+export async function handleDashboardAction(
+  req: ApiRequest,
+  res: ApiResponse,
+  dependencies: GatewayDependencies = defaultDependencies,
+) {
+  const requestId = randomUUID()
+  const reply = (status: number, code: string, message: string) =>
+    send(res, status, code, message, requestId)
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('X-Request-ID', requestId)
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'POST')
+    return reply(405, 'METHOD_NOT_ALLOWED', 'Only POST is supported.')
+  }
+  const operator = await dependencies.authorize(req, res)
+  if (!operator) return
+  if (!['admin', 'operator'].includes(operator.role))
+    return reply(
+      403,
+      'OPERATOR_REQUIRED',
+      'An authenticated dashboard operator session is required.',
+    )
+
+  const origin = req.headers.origin
+  const expectedOrigin = dependencies.env.DASHBOARD_AUTH_URL
+  if (typeof origin !== 'string' || !expectedOrigin || origin !== expectedOrigin)
+    return reply(403, 'INVALID_ORIGIN', 'The action must originate from this dashboard.')
+
+  let url: URL
+  try {
+    url = new URL(req.url ?? '/', 'https://dashboard.invalid')
+  } catch {
+    return reply(400, 'INVALID_QUERY', 'The dashboard request URL is invalid.')
+  }
+  const resource = url.pathname.replace(/^\/api\/dashboard\//, '')
+  const definition = Object.hasOwn(dashboardActionRoutes, resource)
+    ? dashboardActionRoutes[resource as keyof typeof dashboardActionRoutes]
+    : undefined
+  if (!definition) return reply(404, 'NOT_FOUND', 'Dashboard action was not found.')
+  const query = parseQuery(url.searchParams)
+  if (!query || !definition.query.safeParse(query).success)
+    return reply(400, 'INVALID_QUERY', 'Action query parameters are invalid.')
+
+  let body = req.body ?? {}
+  if (typeof body === 'string') {
+    if (Buffer.byteLength(body, 'utf8') > 4096)
+      return reply(400, 'INVALID_BODY', 'Action payload exceeds its size limit.')
+    try {
+      body = body.trim() ? JSON.parse(body) : {}
+    } catch {
+      return reply(400, 'INVALID_BODY', 'Action payload must be JSON.')
+    }
+  }
+  if (!definition.body.safeParse(body).success)
+    return reply(400, 'INVALID_BODY', 'Action payload does not match the middleware contract.')
+
+  return reply(
+    503,
+    'OPERATOR_SESSION_UNAVAILABLE',
+    'The middleware requires its own Better Auth operator session with dashboard:operate. The local contract does not define a session exchange or forwarding mechanism for the dashboard OIDC session. The operation was not submitted.',
+  )
 }
