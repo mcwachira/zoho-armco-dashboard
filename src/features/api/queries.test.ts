@@ -109,4 +109,24 @@ describe('dashboard API query contracts', () => {
       }),
     ).toThrow()
   })
+
+  it('enforces documented manual-review paging and forwards its status/date filters', () => {
+    expect(() => buildDashboardManualReviewPath({ page: 101 })).toThrow()
+    expect(() => buildDashboardManualReviewPath({ status: 'closed' } as never)).toThrow()
+    const query = new URLSearchParams(
+      buildDashboardManualReviewPath({
+        status: 'open',
+        createdFrom: '2026-01-01T00:00:00Z',
+        createdTo: '2026-11-15T23:59:59Z',
+      }).split('?')[1],
+    )
+    expect(query.get('status')).toBe('open')
+    expect(query.get('createdFrom')).toBe('2026-01-01T00:00:00Z')
+    expect(() =>
+      buildDashboardManualReviewPath({
+        createdFrom: '2026-11-15T00:00:00Z',
+        createdTo: '2026-11-14T00:00:00Z',
+      }),
+    ).toThrow()
+  })
 })

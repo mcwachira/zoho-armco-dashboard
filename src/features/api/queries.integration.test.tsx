@@ -24,10 +24,112 @@ function createQueryWrapper(queryClient: QueryClient) {
 }
 
 describe('dashboard API query hooks', () => {
-  it('reports unavailable manual-review data without sending any request', async () => {
+  it.each(['invoice', 'credit-note'] as const)(
+    'loads %s request details through a static route with an encoded identifier',
+    async (kind) => {
+      vi.stubEnv('DEV', false)
+      vi.stubEnv('VITE_DATA_MODE', 'api')
+      const fixtures = await import('./mock-api-fixtures')
+      const payload =
+        kind === 'invoice'
+          ? Object.values(fixtures.mockInvoiceDetails)[0]
+          : Object.values(fixtures.mockCreditNoteDetails)[0]
+      const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)))
+      vi.stubGlobal('fetch', fetchSpy)
+      const queries = await import('./queries')
+      const useDetail =
+        kind === 'invoice'
+          ? queries.useDashboardInvoiceDetailQuery
+          : queries.useDashboardCreditNoteDetailQuery
+      const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const { result, unmount } = renderHook(() => useDetail('request_123'), {
+        wrapper: createQueryWrapper(queryClient),
+      })
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(fetchSpy).toHaveBeenCalledWith(
+        `/api/dashboard/${kind}?id=request_123`,
+        expect.objectContaining({
+          method: 'GET',
+          credentials: 'same-origin',
+          cache: 'no-store',
+          redirect: 'error',
+        }),
+      )
+      unmount()
+      queryClient.clear()
+    },
+  )
+  it('reads passive health through the documented services endpoint', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
-    const fetchSpy = vi.fn()
+    const { mockServiceHealth } = await import('./mock-api-fixtures')
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(JSON.stringify(mockServiceHealth)))
+    vi.stubGlobal('fetch', fetchSpy)
+    const { useDashboardServiceHealthQuery } = await import('./queries')
+    const queryClient = new QueryClient()
+    const { result, unmount } = renderHook(() => useDashboardServiceHealthQuery(), {
+      wrapper: createQueryWrapper(queryClient),
+    })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true))
+    expect(result.current.data).toEqual(mockServiceHealth)
+    expect(result.current.lastUpdatedAt).toBeInstanceOf(Date)
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/dashboard/services',
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
+    unmount()
+    queryClient.clear()
+  })
+
+  it('does not replace rejected telemetry with zero-valued counters', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetchSpy = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'FORBIDDEN',
+              message: 'The middleware gateway rejected the dashboard service credential.',
+            },
+          }),
+          { status: 502 },
+        ),
+      ),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+    const { useDashboardServiceHealthQuery } = await import('./queries')
+    const queryClient = new QueryClient()
+    const { result, unmount } = renderHook(() => useDashboardServiceHealthQuery(), {
+      wrapper: createQueryWrapper(queryClient),
+    })
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 })
+    expect(result.current.data).toBeUndefined()
+    expect(result.current.error).toMatchObject({ status: 502, code: 'FORBIDDEN' })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/dashboard/services',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    unmount()
+    queryClient.clear()
+  })
+
+  it('preserves manual-review gateway failures instead of fabricating a successful unavailable response', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetchSpy = vi.fn().mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: {
+              code: 'CONTRACT_SCHEMA_UNAVAILABLE',
+              message: 'The record DTO is not specified.',
+            },
+          }),
+          { status: 503 },
+        ),
+      ),
+    )
     vi.stubGlobal('fetch', fetchSpy)
     const { useDashboardManualReviewQuery } = await import('./queries')
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -37,9 +139,13 @@ describe('dashboard API query hooks', () => {
         wrapper: createQueryWrapper(queryClient),
       },
     )
-    await waitFor(() => expect(result.current.isSuccess).toBe(true))
-    expect(result.current.data).toMatchObject({ availability: 'unavailable' })
-    expect(fetchSpy).not.toHaveBeenCalled()
+    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 })
+    expect(result.current.data).toBeUndefined()
+    expect(result.current.error).toMatchObject({ status: 503, code: 'CONTRACT_SCHEMA_UNAVAILABLE' })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/dashboard/manual-review?page=1&pageSize=100',
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
     unmount()
     queryClient.clear()
   })

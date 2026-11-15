@@ -57,6 +57,9 @@ export interface DashboardOverviewParams {
 export interface DashboardManualReviewParams {
   page?: number
   pageSize?: number
+  status?: 'open' | 'resolved'
+  createdFrom?: string
+  createdTo?: string
 }
 
 const polling = {
@@ -186,7 +189,7 @@ export function useDashboardCreditNoteListQuery(
 export function useDashboardInvoiceDetailQuery(requestId: string) {
   return useDashboardRead(
     apiQueryKeys.dashboardInvoice(requestId),
-    `/api/dashboard/invoices/${encodeURIComponent(requestId)}`,
+    `/api/dashboard/invoice${toQueryString({ id: requestId })}`,
     dashboardInvoiceDetailSchema,
     Boolean(requestId),
   )
@@ -195,7 +198,7 @@ export function useDashboardInvoiceDetailQuery(requestId: string) {
 export function useDashboardCreditNoteDetailQuery(requestId: string) {
   return useDashboardRead(
     apiQueryKeys.dashboardCreditNote(requestId),
-    `/api/dashboard/credit-notes/${encodeURIComponent(requestId)}`,
+    `/api/dashboard/credit-note${toQueryString({ id: requestId })}`,
     dashboardCreditNoteDetailSchema,
     Boolean(requestId),
   )
@@ -230,27 +233,12 @@ export function useDashboardManualReviewQuery(
   params: DashboardManualReviewParams = {},
   enabled = true,
 ) {
-  const query = { page: params.page ?? 1, pageSize: params.pageSize ?? 25 }
-  // Preserve local fixture views without requesting a nonexistent backend route.
-  return withFreshness(
-    useQuery({
-      queryKey: apiQueryKeys.dashboardManualReview(query),
-      queryFn: ({ signal }) =>
-        localMockApiEnabled
-          ? getDashboardJson(
-              buildDashboardManualReviewPath(query),
-              dashboardManualReviewSchema,
-              signal,
-            )
-          : Promise.resolve(
-              dashboardManualReviewSchema.parse({
-                availability: 'unavailable',
-                reason: 'The middleware does not expose a standalone manual-review collection.',
-              }),
-            ),
-      ...queryOptions(enabled, true),
-      refetchInterval: localMockApiEnabled ? refreshIntervalMs : false,
-    }),
+  const query = { ...params, page: params.page ?? 1, pageSize: params.pageSize ?? 25 }
+  return useDashboardRead(
+    apiQueryKeys.dashboardManualReview(query),
+    () => buildDashboardManualReviewPath(query),
+    dashboardManualReviewSchema,
+    enabled,
   )
 }
 

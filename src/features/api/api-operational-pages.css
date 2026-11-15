@@ -706,3 +706,51 @@
     animation: none;
   }
 }
+
+.api-metric-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 10px;
+  font-size: 11px;
+}
+.api-request-controls {
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.api-request-controls label {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.api-request-controls input,
+.api-request-controls select {
+  max-width: 100%;
+  min-height: 34px;
+  border: 1px solid #39434e;
+  border-radius: 4px;
+  padding: 6px 8px;
+  background: #151b21;
+  color: #d9dfe3;
+}
+.api-request-detail {
+  margin-top: 18px;
+  overflow-wrap: anywhere;
+}
+.api-request-detail .panel-body {
+  padding: 16px;
+}
+.api-request-detail h3 {
+  margin: 22px 0 12px;
+  font-size: 14px;
+}
+.api-request-detail p,
+.api-request-detail li {
+  font-size: 12px;
+  line-height: 1.6;
+}
+.api-request-detail:focus-visible {
+  outline: 2px solid #56c992;
+  outline-offset: 3px;
+}

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -44,6 +44,133 @@ const invoice = {
 }
 
 describe('authenticated operational views', () => {
+  it('opens a filtered credit-note deep link and keeps writeback independent of fiscalization', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const { mockCreditNotes } = await import('./mock-api-fixtures')
+    const note = {
+      ...mockCreditNotes[0],
+      fiscalizationStatus: 'FISCALIZED',
+      writebackStatus: 'failed',
+    }
+    const fetch = vi.fn(async (path: string) => {
+      const params = new URL(path, 'https://dashboard.test').searchParams
+      return jsonResponse({
+        page: 1,
+        pageSize: 25,
+        total: 1,
+        items:
+          path.startsWith('/api/dashboard/credit-notes') && params.get('state') === 'FISCALIZED'
+            ? [note]
+            : [invoice],
+      })
+    })
+    vi.stubGlobal('fetch', fetch)
+    const { ApiFiscalization } = await import('./ApiOperationalPages')
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <MemoryRouter initialEntries={['/fiscalization?kind=credit_note&status=FISCALIZED']}>
+          <ApiFiscalization range="24h" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(await screen.findByText(note.documentNumber!)).toBeInTheDocument()
+    expect(screen.getByRole('tab', { name: 'Credit notes' })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    expect(screen.getByLabelText('Fiscalization status')).toHaveValue('FISCALIZED')
+    expect(screen.getByRole('columnheader', { name: 'ZOHO WRITEBACK' })).toBeInTheDocument()
+    const row = screen.getByText(note.documentNumber!).closest('tr')!
+    expect(within(row).getByText('FISCALIZED')).toBeInTheDocument()
+    expect(within(row).getByText('failed')).toBeInTheDocument()
+    expect(screen.getByText(/Zoho documents never submitted are unavailable/)).toBeInTheDocument()
+  }, 15_000)
+
+  it('shows unavailable register totals when upstream reads fail', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              error: { code: 'HISTORY_UNAVAILABLE', message: 'Request history unavailable' },
+            }),
+            { status: 503 },
+          ),
+      ),
+    )
+    const { ApiFiscalization } = await import('./ApiOperationalPages')
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <MemoryRouter>
+          <ApiFiscalization range="24h" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    expect(
+      await screen.findByText('Record count unavailable', {}, { timeout: 4000 }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('0 matching invoice records')).not.toBeInTheDocument()
+    expect(screen.queryByText('No matching requests')).not.toBeInTheDocument()
+  })
+
+  it('separates failed and uncertain execution metrics and links each to filtered registers', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const { mockOverview } = await import('./mock-api-fixtures')
+    const overview = mockOverview('2026-11-01T00:00:00.000Z', '2026-11-14T23:59:59.999Z')
+    if (overview.availability !== 'available') throw new Error('Available fixture required')
+    overview.metrics.invoices.requestsByStatus = { Failed: 2, OutcomeUnknown: 3, Pending: 4 }
+    overview.metrics.creditNotes.requestsByState = {
+      FAILED: 5,
+      RECONCILIATION_REQUIRED: 7,
+      WRITEBACK_PENDING: 11,
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (path: string) =>
+        path.startsWith('/api/dashboard/overview')
+          ? jsonResponse(overview)
+          : path.startsWith('/api/dashboard/services')
+            ? new Response('', { status: 503 })
+            : jsonResponse({ page: 1, pageSize: 25, total: 0, items: [] }),
+      ),
+    )
+    const { ApiOverview } = await import('./ApiOperationalPages')
+    render(
+      <QueryClientProvider
+        client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
+      >
+        <MemoryRouter>
+          <ApiOverview range="24h" />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    )
+    const failed = (await screen.findByText('FAILED EXECUTIONS')).closest(
+      '.stat-card',
+    ) as HTMLElement
+    const uncertain = screen.getByText('UNCERTAIN OUTCOMES').closest('.stat-card') as HTMLElement
+    expect(within(failed).getByText('7')).toBeInTheDocument()
+    expect(within(uncertain).getByText('10')).toBeInTheDocument()
+    expect(within(failed).getByRole('link', { name: 'Invoices' })).toHaveAttribute(
+      'href',
+      '/requests?kind=invoice&status=Failed',
+    )
+    expect(within(uncertain).getByRole('link', { name: 'Credit notes' })).toHaveAttribute(
+      'href',
+      '/requests?kind=credit_note&status=RECONCILIATION_REQUIRED',
+    )
+    const pending = screen.getByText('PENDING / IN PROGRESS').closest('.stat-card') as HTMLElement
+    expect(within(pending).getByText('4')).toBeInTheDocument()
+  }, 15_000)
+
   it('renders persisted invoice data and search without calling unsupported detail endpoints', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
@@ -86,7 +213,8 @@ describe('authenticated operational views', () => {
     }
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(String(input), 'https://dashboard.example.test')
-      if (url.pathname === '/api/dashboard/invoices/request-42') return jsonResponse(detail)
+      if (url.pathname === '/api/dashboard/invoice' && url.searchParams.get('id') === 'request-42')
+        return jsonResponse(detail)
       if (url.pathname === '/api/dashboard/invoices') {
         const matches =
           !url.searchParams.has('search') || url.searchParams.get('search') === 'INV-42'
@@ -105,6 +233,10 @@ describe('authenticated operational views', () => {
     expect(statusBadgeTone('unavailable')).toBe('bad')
     expect(statusBadgeTone('not_available')).toBe('bad')
     expect(statusBadgeTone('available')).toBe('good')
+    expect(statusBadgeTone('not_ready')).toBe('warn')
+    expect(statusBadgeTone('not_confirmed')).toBe('warn')
+    expect(statusBadgeTone('RECONCILIATION_REQUIRED')).toBe('warn')
+    expect(statusBadgeTone('endpoint_unreachable')).toBe('bad')
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
     const user = userEvent.setup()
 
@@ -133,10 +265,12 @@ describe('authenticated operational views', () => {
     })
 
     await user.click(screen.getByText('INV-42'))
-    expect(await screen.findByRole('dialog', { name: 'request-42' })).toBeInTheDocument()
-    expect(
-      await screen.findByText('This resource is not exposed by the middleware dashboard API.'),
-    ).toBeInTheDocument()
+    expect(await screen.findByRole('dialog', { name: 'INV-42' })).toBeInTheDocument()
+    expect(await screen.findByText('Document & processing')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Open original Zoho document' })).toHaveAttribute(
+      'href',
+      '/invoices?id=zoho-42',
+    )
     expect(
       fetchSpy.mock.calls.some(([input]) => String(input).includes('/invoices/request-42')),
     ).toBe(false)

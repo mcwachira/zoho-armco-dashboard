@@ -70,6 +70,10 @@ function mockResponse(path: string): unknown {
   const route = url.pathname
 
   if (route === '/api/dashboard/capabilities') return mockCapabilities
+  if (route === '/api/dashboard/invoice')
+    return mockInvoiceDetails[url.searchParams.get('id') ?? '']
+  if (route === '/api/dashboard/credit-note')
+    return mockCreditNoteDetails[url.searchParams.get('id') ?? '']
   if (route === '/api/dashboard/invoices') {
     const query = parsePageQuery(url)
     const items = mockInvoices.filter(

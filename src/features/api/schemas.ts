@@ -6,6 +6,24 @@
 export const livenessSchema = z.object({ status: z.literal('ok') })
 export const readinessSchema = z.object({ status: z.enum(['ready', 'not_ready']) })
 
+export const middlewareHealthSchema = z
+  .object({ status: z.enum(['ok', 'ready', 'not_ready']) })
+  .strict()
+
+// Receipt links are rendered as external browser links; URL syntax alone also
+// accepts executable schemes and URLs containing embedded credentials.
+const externalWebUrlSchema = z
+  .string()
+  .url()
+  .refine((value) => {
+    try {
+      const url = new URL(value)
+      return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password
+    } catch {
+      return false
+    }
+  }, 'Expected an HTTP(S) URL without embedded credentials.')
+
 export const dependencyHealthSchema = z.object({
   status: z.literal('diagnostics_complete'),
   dependencies: z.object({
@@ -170,7 +188,7 @@ export const dashboardInvoiceItemSchema = z
     writebackStatus: dashboardWritebackStatusSchema,
     confirmedReceiptEvidence: z.boolean(),
     receiptNumber: z.string().nullable(),
-    qrCode: z.string().url().nullable(),
+    qrCode: externalWebUrlSchema.nullable(),
     fiscalizedAt: dashboardTimestampSchema.nullable(),
     createdAt: dashboardTimestampSchema,
     updatedAt: dashboardTimestampSchema,
@@ -257,10 +275,20 @@ export const dashboardCreditNoteQueryParamsSchema = dashboardPaginationQuerySche
 
 export const dashboardManualReviewQueryParamsSchema = z
   .object({
-    page: z.number().int().min(1).max(100_000).default(1),
+    page: z.number().int().min(1).max(100).default(1),
     pageSize: z.number().int().min(1).max(100).default(25),
+    status: z.enum(['open', 'resolved']).optional(),
+    createdFrom: z.string().datetime({ offset: true }).optional(),
+    createdTo: z.string().datetime({ offset: true }).optional(),
   })
   .strict()
+  .refine(
+    (value) =>
+      !value.createdFrom ||
+      !value.createdTo ||
+      Date.parse(value.createdFrom) <= Date.parse(value.createdTo),
+    { message: 'Date range must be ordered.', path: ['createdTo'] },
+  )
 
 export const dashboardOverviewQueryParamsSchema = z
   .object({
@@ -293,7 +321,7 @@ export const dashboardCreditNoteItemSchema = z
     confirmedReceiptEvidence: z.boolean(),
     receiptNumber: z.string().nullable(),
     cuSerialNumber: z.string().nullable(),
-    qrCode: z.string().url().nullable(),
+    qrCode: externalWebUrlSchema.nullable(),
     fiscalizedAt: dashboardTimestampSchema.nullable(),
     createdAt: dashboardTimestampSchema,
     updatedAt: dashboardTimestampSchema,
@@ -341,7 +369,7 @@ const dashboardAttemptSchema = z
     startedAt: dashboardTimestampSchema,
     completedAt: dashboardTimestampSchema.nullable(),
     receiptNumber: nullableText,
-    qrCode: z.string().url().nullable(),
+    qrCode: externalWebUrlSchema.nullable(),
     issuedAt: dashboardTimestampSchema.nullable(),
     errorCode: nullableText,
     errorMessage: nullableText,
@@ -353,7 +381,7 @@ const invoiceEvidenceSchema = z
     cuSerialNumber: z.string(),
     cuInvoiceNumber: z.string(),
     cuReceiptNumber: z.string(),
-    qrVerificationUrl: z.string().url(),
+    qrVerificationUrl: externalWebUrlSchema,
     fiscalizedAtLocal: z.string(),
     timeZone: z.string(),
     fiscalizedAtUtc: dashboardTimestampSchema,
@@ -505,7 +533,7 @@ const creditNoteEvidenceSchema = z
   .object({
     receiptNumber: z.string(),
     cuSerialNumber: z.string().nullable(),
-    qrCode: z.string().url(),
+    qrCode: externalWebUrlSchema,
     fiscalizedAt: dashboardTimestampSchema,
     transmissionStatus: nullableText,
     persistedEvidence: z.literal(true),
@@ -837,28 +865,59 @@ export const manualReviewCasesPageSchema = z.object({
   offset: z.number().int().nonnegative(),
 })
 
-const jobHealthSchema = z.object({
-  runs: z.number().int().nonnegative(),
-  failures: z.number().int().nonnegative(),
-  consecutiveFailures: z.number().int().nonnegative(),
-  lastStartedAt: z.string().datetime({ offset: true }).nullable(),
-  lastFinishedAt: z.string().datetime({ offset: true }).nullable(),
-  lastSuccessAt: z.string().datetime({ offset: true }).nullable(),
-  lastReconciledAt: z.string().datetime({ offset: true }).nullable(),
-  lastDurationMs: z.number().nonnegative().nullable(),
-  running: z.boolean(),
-  activeWork: z.number().int().nonnegative(),
-})
+const jobHealthSchema = z
+  .object({
+    runs: z.number().int().nonnegative(),
+    failures: z.number().int().nonnegative(),
+    consecutiveFailures: z.number().int().nonnegative(),
+    lastStartedAt: z.string().datetime({ offset: true }).nullable(),
+    lastFinishedAt: z.string().datetime({ offset: true }).nullable(),
+    lastSuccessAt: z.string().datetime({ offset: true }).nullable(),
+    lastReconciledAt: z.string().datetime({ offset: true }).nullable(),
+    lastDurationMs: z.number().nonnegative().nullable(),
+    running: z.boolean(),
+    activeWork: z.number().int().nonnegative(),
+  })
+  .strict()
 
-export const operationalMetricsSchema = z.object({
-  counters: z.record(z.string(), z.number()),
-  jobs: z.record(z.string(), jobHealthSchema),
-  httpDurationMs: z.object({
-    count: z.number().int().nonnegative(),
-    sum: z.number().nonnegative(),
-    buckets: z.record(z.string(), z.number().nonnegative()),
-  }),
-})
+// Source: middleware src/observability/operational-metrics.ts. Labels are
+// deliberately low-cardinality; arbitrary names must not carry identifiers.
+const metricKeySchema = z
+  .string()
+  .regex(
+    /^(http_requests|requests_processed|device_attempts|etims_attempts|reconciliations|zoho_writeback|manual_review_actions|database_checks|database_failures|device_checks|dependency_checks|adapter_timeouts)\.(success|failure|timeout|uncertain|reconciled|2xx|4xx|5xx|opened|resolved|escalated|available|unavailable|not_configured)$/,
+  )
+const metricCount = z.number().int().nonnegative()
+export const operationalMetricsSchema = z
+  .object({
+    counters: z.record(metricKeySchema, metricCount),
+    jobs: z
+      .object({
+        stale_recovery: jobHealthSchema.optional(),
+        zoho_sync: jobHealthSchema.optional(),
+        etims_reconciliation: jobHealthSchema.optional(),
+      })
+      .strict(),
+    httpDurationMs: z
+      .object({
+        count: z.number().int().nonnegative(),
+        sum: z.number().nonnegative(),
+        buckets: z
+          .object({
+            '10': metricCount,
+            '50': metricCount,
+            '100': metricCount,
+            '250': metricCount,
+            '500': metricCount,
+            '1000': metricCount,
+            '5000': metricCount,
+            '+Inf': metricCount,
+          })
+          .strict(),
+      })
+      .strict(),
+  })
+  .strict()
 
 export type Liveness = z.infer<typeof livenessSchema>
 export type Readiness = z.infer<typeof readinessSchema>
@@ -891,3 +950,154 @@ export type DashboardServiceHealth = z.infer<typeof dashboardServiceHealthSchema
 export type ManualReviewCase = z.infer<typeof manualReviewCaseSchema>
 export type ManualReviewCasesPage = z.infer<typeof manualReviewCasesPageSchema>
 export type OperationalMetrics = z.infer<typeof operationalMetricsSchema>
+export type MiddlewareHealth = z.infer<typeof middlewareHealthSchema>
+
+/** Authoritative raw request contract: zoho-books-routes.ts GET /fiscalization-requests/:requestId. */
+export const middlewareRequestQuerySchema = z
+  .object({
+    page: z.number().int().min(1).max(100_000).default(1),
+    pageSize: z.number().int().min(1).max(100).default(25),
+    status: invoiceFiscalizationStatusSchema.optional(),
+    deviceOutcome: invoiceFiscalizationStatusSchema.optional(),
+    createdFrom: dashboardTimestampSchema.optional(),
+    createdTo: dashboardTimestampSchema.optional(),
+    etimsStatus: invoiceReconciliationStatusSchema.optional(),
+    correlationId: z.string().trim().min(1).max(100).optional(),
+  })
+  .strict()
+  .superRefine((query, context) => {
+    if (
+      query.createdFrom &&
+      query.createdTo &&
+      Date.parse(query.createdFrom) > Date.parse(query.createdTo)
+    )
+      context.addIssue({ code: 'custom', message: 'Date range must be ordered.' })
+    if (query.status && query.deviceOutcome && query.status !== query.deviceOutcome)
+      context.addIssue({ code: 'custom', message: 'Device and request status filters must agree.' })
+  })
+
+export const middlewareRequestPageSchema = dashboardPageSchema(
+  fiscalizationHistoryItemSchema
+    .extend({
+      status: invoiceFiscalizationStatusSchema,
+      deviceOutcome: invoiceFiscalizationStatusSchema,
+      deviceAttempts: z.array(
+        z
+          .object({
+            attemptNumber: z.number().int().nonnegative(),
+            outcome: z.enum(['succeeded', 'failed', 'outcome_unknown']).nullable(),
+            errorCode: nullableText,
+          })
+          .strict(),
+      ),
+    })
+    .strict(),
+)
+export const middlewareRequestDetailSchema = z
+  .object({
+    request: z
+      .object({
+        id: z.string(),
+        zohoInvoiceId: z.string(),
+        status: invoiceFiscalizationStatusSchema,
+        processingOutcome: z
+          .object({
+            state: z.enum([
+              'unknown_requires_reconciliation',
+              'pending',
+              'processing',
+              'simulated_success',
+              'confirmed_fiscal_success',
+              'device_or_integration_failure',
+            ]),
+            reconciliationRequired: z.boolean(),
+          })
+          .strict(),
+        issuance: z.object({ enabled: z.boolean(), blockedBy: z.array(z.string()) }).strict(),
+        integrations: z
+          .object({
+            etims: z.string(),
+            etimsSimulated: z.boolean(),
+            etimsBlockedBy: z.array(z.string()),
+            etimsReporting: z
+              .object({
+                operationId: z.string(),
+                adapterType: z.string(),
+                status: z.string(),
+                attemptNumber: z.number().int().nonnegative(),
+                reconciliationRequired: z.boolean(),
+                attempts: z.number().int().nonnegative(),
+                attemptHistory: z.array(
+                  z
+                    .object({
+                      id: z.string(),
+                      type: z.string(),
+                      number: z.number().int().nonnegative(),
+                      startedAt: dashboardTimestampSchema,
+                      completedAt: dashboardTimestampSchema.nullable(),
+                      outcome: nullableText,
+                      providerReference: nullableText,
+                      errorCategory: nullableText,
+                      errorMessage: nullableText,
+                    })
+                    .strict(),
+                ),
+              })
+              .strict()
+              .nullable(),
+            zohoWriteBack: z.literal('not_configured'),
+          })
+          .strict(),
+        createdAt: dashboardTimestampSchema,
+        updatedAt: dashboardTimestampSchema,
+        snapshot: z
+          .object({
+            present: z.boolean(),
+            valid: z.boolean(),
+            version: z.number().int().nullable(),
+            snapshotId: nullableText,
+          })
+          .strict(),
+        receipt: z
+          .object({ receiptNumber: z.string(), issuedAt: dashboardTimestampSchema })
+          .strict()
+          .nullable(),
+        deviceSimulated: z.boolean(),
+        failure: z.object({ code: z.string(), message: z.string() }).strict().nullable(),
+        outcomeUnknown: z.boolean(),
+        processingInProgress: z.boolean(),
+        deviceAttempts: z.array(
+          z
+            .object({
+              id: z.string(),
+              attemptNumber: z.number().int().nonnegative(),
+              startedAt: dashboardTimestampSchema,
+              completedAt: dashboardTimestampSchema.nullable(),
+              outcome: nullableText,
+              receiptNumber: nullableText,
+              issuedAt: dashboardTimestampSchema.nullable(),
+            })
+            .strict(),
+        ),
+        reconciliationRequired: z.boolean(),
+        operatorReviewRequired: z.boolean(),
+      })
+      .strict(),
+  })
+  .strict()
+export const middlewareWritebackSchema = z.discriminatedUnion('status', [
+  z
+    .object({ status: z.literal('not_eligible'), requestId: z.string(), reason: z.string() })
+    .strict(),
+  z
+    .object({
+      status: z.enum(['in_progress', 'succeeded', 'failed', 'outcome_unknown', 'manual_review']),
+      requestId: z.string(),
+      correlationId: z.string(),
+      fieldsWritten: z.number().int().nonnegative(),
+      errorCategory: nullableText,
+    })
+    .strict(),
+])
+export type MiddlewareRequestDetail = z.infer<typeof middlewareRequestDetailSchema>
+export type MiddlewareRequestParams = z.input<typeof middlewareRequestQuerySchema>

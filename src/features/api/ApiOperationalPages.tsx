@@ -25,6 +25,7 @@ import { toast } from 'sonner'
 import { Link, useLocation } from 'react-router-dom'
 import type { GlobalDateRange } from '@/types/dashboard'
 import { useAuth } from '@/lib/auth/AuthProvider'
+import { ApiError } from '@/lib/api/client'
 import {
   useDashboardCapabilitiesQuery,
   useDashboardCreditNoteDetailQuery,
@@ -48,6 +49,8 @@ import type {
   DashboardCreditNoteItem,
   DashboardInvoiceItem,
 } from './schemas'
+import { invoiceFiscalizationStatusSchema, creditNoteFiscalizationStateSchema } from './schemas'
+import { ApiOperationsHome, ApiWritebackOperations } from './ApiOperations'
 import './api-operational-pages.css'
 
 type RecordKind = 'invoice' | 'credit_note'
@@ -186,8 +189,13 @@ export function statusBadgeTone(
   value: string | null | undefined,
 ): 'good' | 'bad' | 'warn' | 'neutral' {
   const normalized = (value ?? 'unknown').toLowerCase()
-  if (/unavailable|not[_ -]?available|fail|reject|error|conflict/.test(normalized)) return 'bad'
-  if (/pending|progress|review|unknown|blocked|partial|not_configured|unverified/.test(normalized))
+  if (/unavailable|unreachable|not[_ -]?available|fail|reject|error|conflict/.test(normalized))
+    return 'bad'
+  if (
+    /pending|progress|review|unknown|blocked|partial|not_configured|unverified|reconciliation_required|not[_ -]?(ready|confirmed|completed)|incomplete/.test(
+      normalized,
+    )
+  )
     return 'warn'
   if (/succeed|complete|confirm|fiscalized|available|reachable|ready|accepted/.test(normalized))
     return 'good'
@@ -233,11 +241,13 @@ function Metric({
   value,
   foot,
   icon: Icon,
+  links,
 }: {
   label: string
   value: string | number
   foot: string
   icon: typeof Gauge
+  links?: { to: string; label: string }[]
 }) {
   return (
     <div className="stat-card api-stat">
@@ -247,6 +257,15 @@ function Metric({
       </div>
       <strong className="stat-value">{value}</strong>
       <small>{foot}</small>
+      {links && (
+        <div className="api-metric-links">
+          {links.map((link) => (
+            <Link key={link.to} to={link.to}>
+              {link.label}
+            </Link>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -294,16 +313,23 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
       available.metrics.creditNotes.confirmedReceiptCount
     : null
   const failed = available
-    ? count(available.metrics.invoices.requestsByStatus, /failed|unknown/) +
-      count(available.metrics.creditNotes.requestsByState, /failed|manual_review/)
+    ? count(available.metrics.invoices.requestsByStatus, /^failed$/) +
+      count(available.metrics.creditNotes.requestsByState, /^failed$/)
+    : null
+  const uncertain = available
+    ? count(available.metrics.invoices.requestsByStatus, /^outcomeunknown$/) +
+      count(available.metrics.creditNotes.requestsByState, /^reconciliation_required$/)
     : null
   const writebackFailures = available
     ? count(available.metrics.invoices.writebackByStatus, /failed|unknown/) +
       count(available.metrics.creditNotes.writebackByStatus, /failed|unknown/)
     : null
   const pendingInProgress = available
-    ? count(available.metrics.invoices.requestsByStatus, /pending|progress/i) +
-      count(available.metrics.creditNotes.requestsByState, /pending|progress/i)
+    ? count(available.metrics.invoices.requestsByStatus, /^(pending|inprogress)$/i) +
+      count(
+        available.metrics.creditNotes.requestsByState,
+        /^(pending|validating|ready|in_progress|device_open_confirmed|items_registered|close_pending)$/i,
+      )
     : null
   const writebackSucceeded = available
     ? count(available.metrics.invoices.writebackByStatus, /^succeeded$/i) +
@@ -392,6 +418,27 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
       {query.data?.availability === 'unavailable' && (
         <Availability title="Overview aggregation unavailable" description={query.data.reason} />
       )}
+      <div className="stat-grid api-stat-grid">
+        <Metric
+          label="TOTAL ZOHO INVOICES"
+          value="Unavailable"
+          foot="Zoho register reads do not provide a reliable total"
+          icon={FileCheck2}
+          links={[{ to: '/invoices', label: 'Open invoice register' }]}
+        />
+        <Metric
+          label="TOTAL ZOHO CREDIT NOTES"
+          value="Unavailable"
+          foot="Zoho register reads do not provide a reliable total"
+          icon={FileCheck2}
+          links={[{ to: '/credit-notes', label: 'Open credit-note register' }]}
+        />
+      </div>
+      <div className="api-source-note api-metric-links">
+        <Link to="/operations">Pending operations</Link>
+        <Link to="/events">Derived operational events</Link>
+        <Link to="/health">System health and telemetry</Link>
+      </div>
       {available && (
         <>
           <div className="api-source-note">
@@ -409,18 +456,37 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
               value={allRequests ?? '—'}
               foot="Invoice + credit-note requests"
               icon={FileCheck2}
+              links={[{ to: '/requests', label: 'View document requests' }]}
             />
             <Metric
               label="CONFIRMED RECEIPTS"
               value={confirmed ?? '—'}
               foot="Persisted receipt evidence"
               icon={CheckCircle2}
+              links={[{ to: '/requests', label: 'View receipt evidence' }]}
             />
             <Metric
-              label="FAILED / UNKNOWN"
+              label="FAILED EXECUTIONS"
               value={failed ?? '—'}
-              foot="Failed and uncertain states"
+              foot="Middleware-confirmed failed states"
               icon={AlertTriangle}
+              links={[
+                { to: '/requests?kind=invoice&status=Failed', label: 'Invoices' },
+                { to: '/requests?kind=credit_note&status=FAILED', label: 'Credit notes' },
+              ]}
+            />
+            <Metric
+              label="UNCERTAIN OUTCOMES"
+              value={uncertain ?? '—'}
+              foot="Outcome unknown or reconciliation required; review before any issuance"
+              icon={ShieldAlert}
+              links={[
+                { to: '/requests?kind=invoice&status=OutcomeUnknown', label: 'Invoices' },
+                {
+                  to: '/requests?kind=credit_note&status=RECONCILIATION_REQUIRED',
+                  label: 'Credit notes',
+                },
+              ]}
             />
             <Metric
               label="WRITEBACK ISSUES"
@@ -431,18 +497,24 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
                   : 'Persisted failed or unknown'
               }
               icon={RefreshCw}
+              links={[{ to: '/writeback', label: 'View writeback operations' }]}
             />
             <Metric
               label={localMockApiEnabled ? 'DEMO · PENDING / IN PROGRESS' : 'PENDING / IN PROGRESS'}
               value={pendingInProgress ?? '—'}
               foot="Invoice and credit-note requests with pending or progress states"
               icon={Clock3}
+              links={[
+                { to: '/requests?status=Pending', label: 'Pending invoices' },
+                { to: '/requests?status=InProgress', label: 'Active invoices' },
+              ]}
             />
             <Metric
               label={localMockApiEnabled ? 'DEMO · WRITEBACK SUCCESS' : 'WRITEBACK SUCCESS'}
               value={writebackSuccessRate === null ? '—' : `${writebackSuccessRate}%`}
               foot={`Terminal statuses: ${writebackSucceeded} succeeded / ${writebackTerminal} total (succeeded + failed + outcome unknown)`}
               icon={CheckCircle2}
+              links={[{ to: '/writeback', label: 'View writeback states' }]}
             />
             <Metric
               label={localMockApiEnabled ? 'DEMO · MANUAL REVIEW' : 'MANUAL REVIEW'}
@@ -453,6 +525,7 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
                   : 'Unresolved review records in this bounded response; API total is unavailable'
               }
               icon={AlertTriangle}
+              links={[{ to: '/manual-review', label: 'Review cases' }]}
             />
           </div>
           <Panel
@@ -460,7 +533,7 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
             subtitle={
               localMockApiEnabled
                 ? 'Latest local fixture records by updated time; not a live event feed'
-                : 'Latest invoice and credit-note request records by updated time; not a system event feed'
+                : 'Most recently updated records among the first 25 requests per type; not a complete activity feed'
             }
             className="api-recent-activity"
           >
@@ -490,8 +563,7 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
                       {new Date(item.updatedAt).toLocaleString()}
                     </time>
                     <Link
-                      to="/fiscalization"
-                      state={{ requestId: item.requestId, documentType: item.kind }}
+                      to={`/requests?kind=${item.kind}&id=${encodeURIComponent(item.requestId)}`}
                     >
                       View details
                     </Link>
@@ -554,7 +626,7 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
               <p className="api-note">
                 {localMockApiEnabled
                   ? 'Fixture time-series, transaction value, processing duration, queue depth, events, and complete manual-review totals are intentionally not simulated.'
-                  : 'Historical time-series, transaction value, processing duration, uptime, queue depth, events, and total manual-review aggregates are unavailable from current persisted read contracts.'}
+                  : 'Historical time-series, transaction value, processing duration, historical uptime, queue depth, event-count and total manual-review aggregates are unavailable. Derived event records have their own view.'}
               </p>
             </Panel>
             <Panel
@@ -668,10 +740,24 @@ function recordCsv(items: Array<DashboardInvoiceItem | DashboardCreditNoteItem>)
 
 export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
   const location = useLocation()
-  const [kind, setKind] = useState<RecordKind>('invoice')
-  const [search, setSearch] = useState('')
+  const [kind, setKind] = useState<RecordKind>(() =>
+    new URLSearchParams(location.search).get('kind') === 'credit_note' ? 'credit_note' : 'invoice',
+  )
+  const [search, setSearch] = useState(
+    () => new URLSearchParams(location.search).get('search') ?? '',
+  )
   const debouncedSearch = useDebounced(search.trim())
-  const [status, setStatus] = useState<'' | DashboardInvoiceStatus | DashboardCreditNoteState>('')
+  const [status, setStatus] = useState<'' | DashboardInvoiceStatus | DashboardCreditNoteState>(
+    () => {
+      const params = new URLSearchParams(location.search)
+      const schema =
+        params.get('kind') === 'credit_note'
+          ? creditNoteFiscalizationStateSchema
+          : invoiceFiscalizationStatusSchema
+      const parsed = schema.safeParse(params.get('status'))
+      return parsed.success ? parsed.data : ''
+    },
+  )
   const [transmission, setTransmission] = useState<'' | DashboardInvoiceTransmissionStatus>('')
   const [reconciliation, setReconciliation] = useState<
     '' | DashboardInvoiceReconciliationStatus | 'NOT_REQUIRED' | 'MANUAL_REVIEW_REQUIRED'
@@ -692,6 +778,7 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
     fiscalization: true,
     transmission: true,
     receipt: true,
+    writeback: true,
     attempts: true,
     updated: true,
   })
@@ -776,6 +863,19 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
       setSelected({ id: state.requestId, kind: state.documentType ?? 'invoice' })
   }, [location.state])
 
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    const nextKind = params.get('kind') === 'credit_note' ? 'credit_note' : 'invoice'
+    const parsedStatus = (
+      nextKind === 'invoice' ? invoiceFiscalizationStatusSchema : creditNoteFiscalizationStateSchema
+    ).safeParse(params.get('status'))
+    setKind(nextKind)
+    setStatus(parsedStatus.success ? parsedStatus.data : '')
+    setSearch(params.get('search') ?? '')
+    const id = params.get('id')
+    if (id) setSelected({ id, kind: nextKind })
+  }, [location.search])
+
   const exportRows = rows ?? []
   return (
     <>
@@ -793,11 +893,17 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
         <ShieldCheck size={15} />{' '}
         {localMockApiEnabled
           ? 'Local fictional fixtures only. Sample accepted or processing states are not live receipts.'
-          : 'Read-only data from the authenticated dashboard API. Accepted or processing states are never treated as confirmed receipts.'}
+          : 'Persisted request coverage only: Zoho documents never submitted are unavailable. Accepted or processing states are never treated as confirmed receipts. Customer and Zoho-status filters require a full document API.'}
       </div>
       <Panel
         title="Fiscalization requests"
-        subtitle={`${total.toLocaleString()} matching ${kind === 'invoice' ? 'invoice' : 'credit-note'} records`}
+        subtitle={
+          current.data
+            ? `${total.toLocaleString()} matching ${kind === 'invoice' ? 'invoice' : 'credit-note'} records`
+            : current.isLoading
+              ? 'Loading record count…'
+              : 'Record count unavailable'
+        }
         className="api-table-panel"
       >
         <div className="api-toolbar">
@@ -947,6 +1053,7 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
                 fiscalization: 'Fiscalization',
                 transmission: 'Transmission',
                 receipt: 'CU receipt',
+                writeback: 'Zoho writeback',
                 attempts: 'Attempts',
                 updated: 'Updated',
               }).map(([key, label]) => (
@@ -1006,6 +1113,7 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
                         {visibleColumns.fiscalization && <th>FISCALIZATION</th>}
                         {visibleColumns.transmission && <th>TRANSMISSION</th>}
                         {visibleColumns.receipt && <th>CU RECEIPT</th>}
+                        {visibleColumns.writeback && <th>ZOHO WRITEBACK</th>}
                         {visibleColumns.attempts && <th>ATTEMPTS</th>}
                         {visibleColumns.updated && <th>UPDATED</th>}
                         <th>DETAIL</th>
@@ -1070,11 +1178,25 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
                               )}
                             </td>
                           )}
+                          {visibleColumns.writeback && (
+                            <td>
+                              <StatusBadge value={row.writebackStatus} />
+                            </td>
+                          )}
                           {visibleColumns.attempts && <td>{row.attemptCount}</td>}
                           {visibleColumns.updated && (
                             <td>{new Date(row.updatedAt).toLocaleString()}</td>
                           )}
                           <td>
+                            {row.documentType === 'invoice' && (
+                              <Link
+                                to={`/requests?id=${encodeURIComponent(row.requestId)}`}
+                                onClick={(event) => event.stopPropagation()}
+                                aria-label={`Open execution request ${row.requestId}`}
+                              >
+                                Execution
+                              </Link>
+                            )}
                             <button
                               className="icon-button"
                               aria-label={`Open ${row.documentNumber ?? row.requestId}`}
@@ -1215,7 +1337,13 @@ function copy(value: string) {
     .catch(() => toast.error('Clipboard access is unavailable'))
 }
 
-function RecordDrawer({ selected, onClose }: { selected: SelectedRecord; onClose: () => void }) {
+export function RecordDrawer({
+  selected,
+  onClose,
+}: {
+  selected: SelectedRecord
+  onClose: () => void
+}) {
   const invoice = useDashboardInvoiceDetailQuery(selected.kind === 'invoice' ? selected.id : '')
   const credit = useDashboardCreditNoteDetailQuery(
     selected.kind === 'credit_note' ? selected.id : '',
@@ -1289,13 +1417,29 @@ function RecordDrawer({ selected, onClose }: { selected: SelectedRecord; onClose
           </button>
         </div>
         <div className="drawer-scroll">
-          <DataState
-            isLoading={query.isLoading}
-            isError={query.isError}
-            hasData={Boolean(query.data)}
-            error={query.error}
-            refetch={query.refetch}
-          />
+          {request && (
+            <p className="api-note">
+              <Link
+                to={`/${selected.kind === 'invoice' ? 'invoices' : 'credit-notes'}?id=${encodeURIComponent(request.zohoDocumentId)}`}
+              >
+                Open original Zoho document
+              </Link>
+            </p>
+          )}
+          {query.error instanceof ApiError && query.error.kind === 'disabled' ? (
+            <Availability
+              title="Request detail currently unavailable"
+              description={query.error.message}
+            />
+          ) : (
+            <DataState
+              isLoading={query.isLoading}
+              isError={query.isError}
+              hasData={Boolean(query.data)}
+              error={query.error}
+              refetch={query.refetch}
+            />
+          )}
           {!query.isError && !query.isLoading && request && (
             <>
               <div className="api-detail-summary">
@@ -1511,7 +1655,12 @@ function InvoiceDetail({
           label="Fields not written"
           value="No per-field failure list is exposed by the middleware contract."
         />
-        <DetailLine label="Attempts" value={String(request.writeback?.retryCount ?? 0)} />
+        <DetailLine
+          label="Retry count"
+          value={
+            request.writeback ? String(request.writeback.retryCount) : 'No operation persisted'
+          }
+        />
         <DetailLine
           label="Last update"
           value={
@@ -1531,6 +1680,27 @@ function InvoiceDetail({
           label="Reconciliation required"
           value={request.etims ? String(request.etims.reconciliationRequired) : 'Unknown'}
         />
+        {request.etims?.attempts.map((attempt) => (
+          <article
+            className="api-attempt-card"
+            key={`${attempt.attemptType}-${attempt.attemptNumber}`}
+          >
+            <h4>
+              {attempt.attemptType} attempt {attempt.attemptNumber}
+            </h4>
+            <DetailLine label="Started" value={new Date(attempt.startedAt).toLocaleString()} />
+            <DetailLine
+              label="Completed"
+              value={
+                attempt.completedAt
+                  ? new Date(attempt.completedAt).toLocaleString()
+                  : 'Not completed'
+              }
+            />
+            <DetailLine label="Outcome" value={attempt.outcome ?? 'Unconfirmed'} />
+            <DetailLine label="Error category" value={attempt.errorCategory ?? 'None returned'} />
+          </article>
+        ))}
       </DetailSection>
       <DetailSection title="Manual review">
         {request.manualReview ? (
@@ -1688,12 +1858,24 @@ function CreditNoteDetail({
               detail: 'Persisted credit-note request',
               status: 'persisted',
             },
-            ...request.attempts.map((attempt) => ({
-              at: attempt.startedAt,
-              title: `Device attempt ${attempt.attemptNumber}${attempt.stage ? ` · ${attempt.stage}` : ''}`,
-              detail: attempt.errorCategory ?? attempt.errorDetails ?? attempt.status,
-              status: attempt.status,
-            })),
+            ...request.attempts.flatMap((attempt) => [
+              {
+                at: attempt.startedAt,
+                title: `Device attempt ${attempt.attemptNumber}${attempt.stage ? ` · ${attempt.stage}` : ''}`,
+                detail: attempt.errorCategory ?? attempt.errorDetails ?? attempt.status,
+                status: attempt.status,
+              },
+              ...(attempt.completedAt
+                ? [
+                    {
+                      at: attempt.completedAt,
+                      title: `Device attempt ${attempt.attemptNumber} completed`,
+                      detail: attempt.errorCategory ?? attempt.errorDetails ?? attempt.status,
+                      status: attempt.status,
+                    },
+                  ]
+                : []),
+            ]),
             ...(request.evidence
               ? [
                   {
@@ -1900,6 +2082,10 @@ export function ApiDevice() {
 
 type WritebackRow = { kind: RecordKind; row: DashboardInvoiceItem | DashboardCreditNoteItem }
 export function ApiWriteback({ range }: { range: GlobalDateRange }) {
+  return localMockApiEnabled ? <LegacyApiWriteback range={range} /> : <ApiWritebackOperations />
+}
+
+function LegacyApiWriteback({ range }: { range: GlobalDateRange }) {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<
     '' | DashboardInvoiceWritebackFilter | DashboardCreditNoteWritebackStatus
@@ -2147,6 +2333,10 @@ export function ApiWriteback({ range }: { range: GlobalDateRange }) {
 }
 
 export function ApiMonitoring() {
+  return localMockApiEnabled ? <LegacyApiMonitoring /> : <ApiOperationsHome />
+}
+
+function LegacyApiMonitoring() {
   const [page, setPage] = useState(1)
   const reviews = useDashboardManualReviewQuery({ page, pageSize: 25 })
   const reconciliation = useDashboardReconciliationQuery()
@@ -2239,6 +2429,9 @@ export function ApiMonitoring() {
             title="Middleware telemetry"
             subtitle="In-process metrics; counters reset when the process restarts"
           >
+            <p className="api-note">
+              <Link to="/health">Open system health and middleware telemetry</Link>
+            </p>
             <DataState
               isLoading={services.isLoading}
               isError={services.isError}
@@ -2265,9 +2458,15 @@ export function ApiMonitoring() {
                   value={
                     services.data.observability?.httpDurationMs.count
                       ? `${Math.round(services.data.observability.httpDurationMs.sum / services.data.observability.httpDurationMs.count)} ms`
-                      : 'No observations'
+                      : services.data.observability
+                        ? 'No observations'
+                        : 'Unavailable'
                   }
-                  detail={`${services.data.observability?.httpDurationMs.count ?? 0} observations since process start`}
+                  detail={
+                    services.data.observability
+                      ? `${services.data.observability.httpDurationMs.count} observations since process start`
+                      : 'Telemetry was not returned by middleware'
+                  }
                 />
                 {services.data.observability ? (
                   Object.entries(services.data.observability.jobs).map(([name, job]) => (
@@ -2326,7 +2525,7 @@ function CapabilityMessage({
 }) {
   return (
     <div className="api-capability">
-      <StatusBadge value={status ?? 'checking'} />
+      <StatusBadge value={status ?? 'unavailable'} />
       <strong>{title}</strong>
       <p>
         {reason ?? 'The middleware does not expose a verified read contract for this collection.'}
