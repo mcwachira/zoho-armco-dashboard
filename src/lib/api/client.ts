@@ -53,7 +53,11 @@ export async function getJson<T>(
     )
   if (!path.startsWith('/api/dashboard/'))
     throw new ApiError('Only dashboard read routes are available.', undefined, 'configuration')
-  if (!/^\/api\/dashboard\/(overview|invoices|credit-notes|services)(\?|$)/.test(path))
+  if (
+    !/^\/api\/dashboard\/(overview|invoices|invoice|credit-notes|credit-note|services|device|capabilities|writebacks|manual-review|manual-review-case|reconciliation|events|operations|documents\/(?:invoices|invoice|credit-notes|credit-note)|requests|request|writeback|health|telemetry)(\?|$)/.test(
+      path,
+    )
+  )
     throw new ApiError(
       'This resource is not exposed by the middleware dashboard API.',
       undefined,
@@ -70,6 +74,8 @@ export async function getJson<T>(
       headers: { Accept: 'application/json' },
       signal: controller.signal,
       credentials: 'same-origin',
+      cache: 'no-store',
+      redirect: 'error',
     })
     if (!response.ok) {
       const kind =

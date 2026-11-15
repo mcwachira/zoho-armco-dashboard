@@ -193,12 +193,12 @@ describe('same-origin dashboard API client safety boundary', () => {
   })
 
   it.each([
-    'manual-review',
-    'capabilities',
-    'device',
-    'reconciliation',
-    'writebacks',
     'invoices/123',
+    'actions/fiscalize',
+    '../auth/session',
+    'services/../actions/fiscalize',
+    'documents/invoices/123',
+    'events#fragment',
   ])('never fetches unsupported resource %s', async (resource) => {
     vi.stubEnv('VITE_DATA_MODE', 'api')
     const fetchSpy = vi.fn()
@@ -209,4 +209,47 @@ describe('same-origin dashboard API client safety boundary', () => {
     })
     expect(fetchSpy).not.toHaveBeenCalled()
   })
+})
+
+it.each([
+  'requests?page=1&pageSize=20',
+  'request?id=123',
+  'writeback?id=123',
+  'invoice?id=123',
+  'credit-note?id=123',
+  'manual-review',
+  'manual-review-case?id=123',
+  'capabilities',
+  'device',
+  'reconciliation',
+  'writebacks?page=2',
+  'events',
+  'operations',
+  'documents/invoices?page=1',
+  'documents/credit-notes?page=2',
+  'documents/invoice?id=123',
+  'documents/credit-note?id=123',
+])('allows contracted same-origin operational GET %s', async (resource) => {
+  vi.resetModules()
+  vi.stubEnv('DEV', false)
+  vi.stubEnv('VITE_DATA_MODE', 'api')
+  const fetchSpy = vi.fn().mockResolvedValue(
+    new Response(JSON.stringify({ ok: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+  vi.stubGlobal('fetch', fetchSpy)
+  try {
+    const { getJson } = await import('./client')
+    await expect(
+      getJson(`/api/dashboard/${resource}`, z.object({ ok: z.boolean() })),
+    ).resolves.toEqual({ ok: true })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      `/api/dashboard/${resource}`,
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
+  } finally {
+    vi.unstubAllEnvs()
+    vi.unstubAllGlobals()
+  }
 })

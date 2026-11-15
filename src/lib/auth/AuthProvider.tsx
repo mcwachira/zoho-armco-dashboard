@@ -1,4 +1,12 @@
-import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 
 export interface Identity {
@@ -23,6 +31,7 @@ interface AuthContextValue extends AuthValue {
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
+const LOGOUT_STORAGE_KEY = 'zoho-dashboard-logout'
 const mockEnabled = import.meta.env.DEV && import.meta.env.VITE_AUTH_MODE === 'development-mock'
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -72,14 +81,19 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
   const [sessionState, setSessionState] = useState<SessionState>('loading')
   const [error, setError] = useState<string | undefined>()
   const [expiresAt, setExpiresAt] = useState<number | null>(null)
+  const sessionGeneration = useRef(0)
 
   const setSession = (nextUser: Identity | null, state: SessionState, nextError?: string) => {
+    if (state !== 'active') queryClient.clear()
     setUser(nextUser)
     setSessionState(state)
     setError(nextError)
   }
 
   const refreshSession = async () => {
+    // Every validation supersedes older requests, including a response whose
+    // JSON body finishes after a newer validation has rejected the session.
+    const generation = ++sessionGeneration.current
     try {
       const response = await fetch('/api/auth/session', {
         method: 'GET',
@@ -87,6 +101,7 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
         headers: { Accept: 'application/json' },
         cache: 'no-store',
       })
+      if (generation !== sessionGeneration.current) return
       if (response.status === 401) {
         setExpiresAt(null)
         setSession(null, 'signed-out')
@@ -107,6 +122,7 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
         return
       }
       const payload: unknown = await response.json()
+      if (generation !== sessionGeneration.current) return
       if (
         !payload ||
         typeof payload !== 'object' ||
@@ -117,9 +133,10 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
         typeof payload.user.email !== 'string' ||
         !('role' in payload.user) ||
         typeof payload.user.role !== 'string' ||
+        !['admin', 'operator', 'viewer'].includes(payload.user.role) ||
         !('expiresAt' in payload) ||
         typeof payload.expiresAt !== 'number' ||
-        !Number.isFinite(payload.expiresAt) ||
+        !Number.isSafeInteger(payload.expiresAt) ||
         payload.expiresAt <= Date.now()
       ) {
         setSession(null, 'unavailable', 'Dashboard authentication returned an invalid session.')
@@ -135,19 +152,38 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
       )
       setExpiresAt(payload.expiresAt)
     } catch {
+      if (generation !== sessionGeneration.current) return
       setSession(null, 'unavailable', 'Dashboard authentication service could not be reached.')
     }
   }
 
   useEffect(() => {
     void refreshSession()
+    const onFocus = () => void refreshSession()
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void refreshSession()
+    }
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void refreshSession()
+    }
+    // Recheck server cookies after returning to a background tab or a page
+    // restored from browser history. Storage notifications may be disabled.
+    window.addEventListener('focus', onFocus)
+    window.addEventListener('pageshow', onPageShow)
+    document.addEventListener('visibilitychange', onVisible)
+    return () => {
+      sessionGeneration.current += 1
+      window.removeEventListener('focus', onFocus)
+      window.removeEventListener('pageshow', onPageShow)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
   }, [])
 
   useEffect(() => {
     if (expiresAt === null) return
     const timer = window.setTimeout(
       () => {
-        queryClient.clear()
+        sessionGeneration.current += 1
         setExpiresAt(null)
         setSession(null, 'expired')
       },
@@ -158,12 +194,23 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     const onUnauthorized = () => {
-      queryClient.clear()
+      sessionGeneration.current += 1
       setExpiresAt(null)
       setSession(null, 'expired')
     }
     window.addEventListener('zoho-auth-unauthorized', onUnauthorized)
     return () => window.removeEventListener('zoho-auth-unauthorized', onUnauthorized)
+  }, [queryClient])
+
+  useEffect(() => {
+    const onStorage = (event: StorageEvent) => {
+      if (event.key !== LOGOUT_STORAGE_KEY || !event.newValue) return
+      sessionGeneration.current += 1
+      setExpiresAt(null)
+      setSession(null, 'signed-out')
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
   }, [queryClient])
 
   const value = useMemo<AuthContextValue>(
@@ -180,18 +227,25 @@ function ServerAuthProvider({ children }: { children: ReactNode }) {
           method: 'POST',
           credentials: 'same-origin',
         })
-        if (!response.ok) throw new Error('Dashboard sign out failed.')
-        queryClient.clear()
+        // The auth handler confirms cookie deletion with 204. A successful HTML
+        // fallback or an unrelated JSON response is not evidence of logout.
+        if (response.status !== 204) throw new Error('Dashboard sign out failed.')
+        sessionGeneration.current += 1
         setExpiresAt(null)
         setSession(null, 'signed-out')
+        try {
+          localStorage.setItem(LOGOUT_STORAGE_KEY, crypto.randomUUID())
+        } catch {
+          // Cookie invalidation and local cache clearing still work when storage is disabled.
+        }
       },
       expireSession: () => {
-        queryClient.clear()
+        sessionGeneration.current += 1
         setExpiresAt(null)
         setSession(null, 'expired')
       },
       markUnauthorized: () => {
-        queryClient.clear()
+        sessionGeneration.current += 1
         setExpiresAt(null)
         setSession(null, 'unauthorized')
       },

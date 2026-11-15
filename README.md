@@ -1,8 +1,18 @@
 # ZohoAmarco Monitoring Dashboard
 
+The operational extension adds invoice/credit-note register entry points,
+combined request history, independent writeback operations, monitoring routes and
+passive system health. See the [implementation report](docs/IMPLEMENTATION-REPORT.md)
+for the audit, complete static gateway mapping, current test results and limitations.
+[Middleware dependencies](docs/MIDDLEWARE-DEPENDENCIES.md) identify what still
+prevents complete document registers, recovery actions and operational feeds.
+
 ZohoAmarco Monitoring Dashboard is a read-only web application for monitoring invoice and credit-note fiscalization operations, receipt evidence, Zoho writeback state, reconciliation coverage, device diagnostics, and service health. It uses protected same-origin server functions to reach the authenticated middleware gateway.
 
-The dashboard does not submit fiscalization requests, create or update Zoho documents, retry transactions, operate fiscal hardware, or modify reconciliation or manual-review records. The existing Zoho button gateway is a separate workflow and is not used by this application.
+Operational POST handlers validate the three documented middleware actions, but
+remain unavailable until the distinct middleware Better Auth operator-session
+integration is documented. The GET service bearer is never substituted for that
+session. The dashboard contains no fiscalization, device-command or tax logic.
 
 ## Current data availability
 
@@ -13,15 +23,20 @@ Local development defaults to explicitly labeled `DEMO` fixtures. Demo identitie
 ## Features and availability
 
 - **Overview:** request counts, status summaries, writeback rate, recent activity and charts when the selected source supplies those aggregates. Unsupported metrics are shown as unavailable.
+- **Requests:** persisted invoice and credit-note history, search/status/date/transmission/reconciliation/writeback filters, pagination, linked detail, chronological attempts and independent writeback state. This is not a complete Zoho document register.
+- **Document registers:** supported search/date/customer/status/sort controls and Zoho-ID lookup; live rows/details remain unavailable because the supplied contract omits exact response DTOs. Never-submitted document coverage is not claimed complete.
+- **System health:** documented middleware services endpoint supplies process uptime, dependency observations and optional telemetry. Unknown/unverified dependencies retain those states; worker activity is not queue depth.
 - **Fiscalization:** invoice and credit-note lists, bounded search, date/status filters, page navigation, sorting within the loaded page, CSV export, and detail views for status, attempts, receipt/CU evidence, fiscal QR and writeback information when supplied.
-- **Writeback:** read-only per-request writeback state, filters and detail links. The source does not provide a complete writeback collection; the page identifies that limitation.
-- **Monitoring:** manual-review records with partial/lower-bound coverage where applicable, reconciliation availability and conflicts where supplied, and explicit missing-coverage states.
+- **Writeback:** documented persisted operation collection with server filtering/pagination and independent retry/provider-exchange counts, timestamps and request links.
+- **Monitoring:** separate manual-review, reconciliation, derived-events and pending-operation routes with documented filter controls. Missing row DTOs remain explicit errors; existing request detail provides associated review/reconciliation evidence.
 - **G03 device:** device identity, communication and readiness fields are shown only if supplied. Unknown serial, physical health, and communication history remain unavailable.
 - **Services:** middleware and dependency health where supplied. A service status is not presented as proof of gateway health.
 - **Settings:** display-only account, session, environment and connection status.
 - **Shared interface:** responsive navigation, refresh, global date range, command palette, notifications and session logout.
 
-External data dependent pages remain useful in unconfigured mode by explaining that data is unavailable. See [the API integration guide](docs/API-INTEGRATION.md) and [source contract audit](docs/API-CONTRACT-AUDIT.md) for capability limits.
+External data dependent pages explain unavailable data without inventing records.
+See [the integration guide](docs/API-INTEGRATION.md) and
+[local authoritative contract](docs/dashboard-api-contract.md) for capability limits.
 
 ## Architecture
 
@@ -31,7 +46,7 @@ flowchart LR
   SPA[Vercel-hosted Vite SPA]
   API[Same-origin Vercel API Functions]
   Auth[Google OIDC session and server-side role checks]
-  Adapter[Four GET resources and Zod validation]
+  Adapter[Static GET allowlist and Zod validation]
   TestAPI[Authenticated public gateway to middleware]
   Browser --> SPA
   SPA -->|same-origin /api/*| API
@@ -56,6 +71,13 @@ api/
   dashboard/invoices.ts Dashboard invoice collection GET API
   dashboard/credit-notes.ts Dashboard credit-note collection GET API
   dashboard/services.ts Dashboard service status GET API
+  dashboard/requests.ts Persisted request history GET API
+  dashboard/request.ts  Request detail GET API with strict id query
+  dashboard/writebacks.ts Persisted independent writeback operations GET API
+  dashboard/documents/  Live document read handlers (response DTOs pending)
+  dashboard/actions/    Strict action handlers (operator-session integration pending)
+  dashboard/health.ts   Legacy unavailable response; health uses services
+  dashboard/telemetry.ts Legacy unavailable response; telemetry uses services
 src/
   app/                  Application shell, route views, and UI tests
   components/layout/    Command palette, notifications, shared UX

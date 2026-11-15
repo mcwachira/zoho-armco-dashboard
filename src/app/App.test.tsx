@@ -36,12 +36,99 @@ async function renderApp(path: string, authMode = 'development-mock') {
 }
 
 describe('application route smoke checks', () => {
+  it('shows Logout in navigation, posts to the existing endpoint and redirects after success', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    let completeLogout!: (response: Response) => void
+    const logoutResponse = new Promise<Response>((resolve) => {
+      completeLogout = resolve
+    })
+    const fetchSpy = vi.fn((input: string | URL | Request) => {
+      if (String(input) === '/api/auth/session')
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              user: { email: 'reader@example.test', role: 'viewer' },
+              expiresAt: Date.now() + 60_000,
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      if (String(input) === '/api/auth/logout') return logoutResponse
+      return Promise.resolve(new Response('', { status: 503 }))
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const { queryClient } = await renderApp('/overview', 'google-oidc')
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    const privateRecordKey = ['middleware', 'private-record']
+    queryClient.setQueryData(privateRecordKey, { requestId: 'test-record' })
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Logout' }))
+    expect(fetchSpy).toHaveBeenCalledWith('/api/auth/logout', {
+      method: 'POST',
+      credentials: 'same-origin',
+    })
+    expect(screen.getByRole('button', { name: 'Logout' })).toBeDisabled()
+    expect(queryClient.getQueryData(privateRecordKey)).toBeDefined()
+
+    completeLogout(new Response(null, { status: 204 }))
+    expect(
+      await screen.findByRole('heading', { name: 'Sign in to your workspace' }),
+    ).toBeInTheDocument()
+    expect(queryClient.getQueryData(privateRecordKey)).toBeUndefined()
+    expect(screen.queryByRole('heading', { name: 'Overview' })).not.toBeInTheDocument()
+    queryClient.clear()
+  }, 15_000)
+
+  it('keeps the session and cached records when the logout POST fails', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetchSpy = vi.fn((input: string | URL | Request) => {
+      if (String(input) === '/api/auth/session')
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              user: { email: 'reader@example.test', role: 'viewer' },
+              expiresAt: Date.now() + 60_000,
+            }),
+            { headers: { 'Content-Type': 'application/json' } },
+          ),
+        )
+      return Promise.resolve(new Response('', { status: 503 }))
+    })
+    vi.stubGlobal('fetch', fetchSpy)
+    const { queryClient } = await renderApp('/overview', 'google-oidc')
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    const privateRecordKey = ['middleware', 'private-record']
+    queryClient.setQueryData(privateRecordKey, { requestId: 'test-record' })
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Logout' }))
+    expect(
+      await screen.findByText('Sign out failed. Refresh the session and try again.'),
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Logout' })).toBeEnabled()
+    expect(screen.getByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    expect(queryClient.getQueryData(privateRecordKey)).toBeDefined()
+    expect(
+      screen.queryByRole('heading', { name: 'Sign in to your workspace' }),
+    ).not.toBeInTheDocument()
+    queryClient.clear()
+  }, 15_000)
+
   it.each([
     ['/overview', 'Overview'],
+    ['/invoices', 'Invoice register'],
+    ['/credit-notes', 'Credit-note register'],
+    ['/manual-review', 'Manual review'],
+    ['/reconciliation', 'Reconciliation'],
+    ['/events', 'Derived operational events'],
+    ['/operations', 'Pending operations'],
     ['/fiscalization', 'Fiscalization'],
+    ['/requests', 'Fiscalization requests'],
     ['/device', 'G03 Device'],
     ['/writeback', 'Writeback'],
     ['/monitoring', 'Monitoring'],
+    ['/health', 'System health'],
     ['/settings', 'Settings'],
     ['/login', 'Sign in to your workspace'],
   ])('renders %s', async (path, heading) => {

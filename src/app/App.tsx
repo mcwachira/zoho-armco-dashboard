@@ -84,20 +84,40 @@ import {
   ApiSettings,
   ApiWriteback,
 } from '@/features/api/ApiOperationalPages'
+import { ApiRequests } from '@/features/api/ApiRequests'
+import { ApiSystemHealth } from '@/features/api/ApiSystemHealth'
+import { ApiDocuments } from '@/features/api/ApiDocuments'
+import { ApiOperationCollection } from '@/features/api/ApiOperations'
 
 const nav: { label: string; path: string; icon: LucideIcon }[] = [
   { label: 'Overview', path: '/overview', icon: LayoutDashboard },
+  { label: 'Invoices', path: '/invoices', icon: FileText },
+  { label: 'Credit notes', path: '/credit-notes', icon: FileText },
   { label: 'Fiscalization', path: '/fiscalization', icon: FileCheck2 },
+  { label: 'Requests', path: '/requests', icon: FileClock },
   { label: 'G03 Device', path: '/device', icon: MonitorCog },
   { label: 'Writeback', path: '/writeback', icon: RefreshCw },
   { label: 'Monitoring', path: '/monitoring', icon: Activity },
+  { label: 'Manual review', path: '/manual-review', icon: ShieldCheck },
+  { label: 'Reconciliation', path: '/reconciliation', icon: ListFilter },
+  { label: 'System events', path: '/events', icon: Activity },
+  { label: 'Pending operations', path: '/operations', icon: Clock3 },
+  { label: 'System health', path: '/health', icon: Activity },
 ]
 const routeNames: Record<string, string> = {
   '/overview': 'Overview',
+  '/invoices': 'Invoice register',
+  '/credit-notes': 'Credit-note register',
+  '/manual-review': 'Manual review',
+  '/reconciliation': 'Reconciliation',
+  '/events': 'Derived operational events',
+  '/operations': 'Pending operations',
   '/fiscalization': 'Fiscalization',
+  '/requests': 'Fiscalization requests',
   '/device': 'G03 Device',
   '/writeback': 'Zoho writeback',
   '/monitoring': 'Monitoring',
+  '/health': 'System health',
   '/settings': 'Settings',
 }
 const todayLabel = new Intl.DateTimeFormat('en-KE', {
@@ -208,6 +228,7 @@ function Shell() {
   const [collapsed, setCollapsed] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
+  const [loggingOut, setLoggingOut] = useState(false)
   const [refreshed, setRefreshed] = useState(new Date())
   const [globalRange, setGlobalRange] = useState<GlobalDateRange>('24h')
   const avatarLabel =
@@ -217,6 +238,20 @@ function Shell() {
       .slice(0, 2)
       .join('') ?? 'OP'
   const title = routeNames[loc.pathname] ?? 'Overview'
+  const logout = async () => {
+    if (loggingOut) return
+    setLoggingOut(true)
+    try {
+      await auth.logout()
+      queryClient.clear()
+      setUserOpen(false)
+      navigate('/login', { replace: true })
+    } catch {
+      toast.error('Sign out failed. Refresh the session and try again.')
+    } finally {
+      setLoggingOut(false)
+    }
+  }
   const refresh = () => {
     if (apiMode === 'mock') {
       toast.info('Demo snapshot is local and static; no live API request was made.')
@@ -296,6 +331,17 @@ function Shell() {
             <SettingsIcon size={18} />
             <span>Settings</span>
           </NavLink>
+          <button
+            type="button"
+            className="button secondary full"
+            aria-label="Logout"
+            title="Logout"
+            disabled={loggingOut}
+            onClick={() => void logout()}
+          >
+            <LogOut size={16} aria-hidden="true" />
+            {!collapsed && <span>{loggingOut ? 'Logging out…' : 'Logout'}</span>}
+          </button>
           <div className="side-user">
             <div className="avatar">{avatarLabel}</div>
             {!collapsed && (
@@ -403,20 +449,7 @@ function Shell() {
                   <strong>{auth.user?.name ?? 'Guest operator'}</strong>
                   <small>{auth.user?.email ?? 'No active session'}</small>
                   <hr />
-                  <button
-                    onClick={() => {
-                      setUserOpen(false)
-                      void auth
-                        .logout()
-                        .then(() => {
-                          queryClient.clear()
-                          navigate('/login')
-                        })
-                        .catch(() =>
-                          toast.error('Sign out failed. Refresh the session and try again.'),
-                        )
-                    }}
-                  >
+                  <button type="button" disabled={loggingOut} onClick={() => void logout()}>
                     <LogOut size={14} /> Sign out
                   </button>
                 </div>
@@ -430,6 +463,35 @@ function Shell() {
               <Route path="/" element={<Navigate to="/overview" replace />} />
               <Route path="/login" element={<Login />} />
               <Route
+                path="/invoices"
+                element={
+                  <Protected>
+                    <ApiDocuments kind="invoice" />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/credit-notes"
+                element={
+                  <Protected>
+                    <ApiDocuments kind="credit_note" />
+                  </Protected>
+                }
+              />
+              {(['manual-review', 'reconciliation', 'events', 'operations'] as const).map(
+                (family) => (
+                  <Route
+                    key={family}
+                    path={`/${family}`}
+                    element={
+                      <Protected>
+                        <ApiOperationCollection family={family} />
+                      </Protected>
+                    }
+                  />
+                ),
+              )}
+              <Route
                 path="/overview"
                 element={
                   <Protected>
@@ -442,6 +504,14 @@ function Shell() {
                 element={
                   <Protected>
                     <ApiFiscalization range={globalRange} />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/requests"
+                element={
+                  <Protected>
+                    <ApiRequests />
                   </Protected>
                 }
               />
@@ -466,6 +536,14 @@ function Shell() {
                 element={
                   <Protected>
                     <ApiMonitoring />
+                  </Protected>
+                }
+              />
+              <Route
+                path="/health"
+                element={
+                  <Protected>
+                    <ApiSystemHealth />
                   </Protected>
                 }
               />

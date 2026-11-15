@@ -29,6 +29,32 @@ import type { DashboardCreditNoteItem, DashboardInvoiceItem } from '@/features/a
 import './global-ux.css'
 
 const destinations = [
+  { title: 'Invoices', detail: 'Live Zoho invoice register', path: '/invoices', Icon: FileText },
+  {
+    title: 'Credit notes',
+    detail: 'Live Zoho credit-note register',
+    path: '/credit-notes',
+    Icon: FileText,
+  },
+  {
+    title: 'Manual review',
+    detail: 'Persisted invoice cases and credit-note review state',
+    path: '/manual-review',
+    Icon: Activity,
+  },
+  {
+    title: 'Reconciliation',
+    detail: 'Persisted reconciliation outcomes',
+    path: '/reconciliation',
+    Icon: Activity,
+  },
+  { title: 'System events', detail: 'Derived operational events', path: '/events', Icon: Activity },
+  {
+    title: 'Pending operations',
+    detail: 'Persisted workflow states',
+    path: '/operations',
+    Icon: Activity,
+  },
   {
     title: 'Overview',
     detail: 'Operational snapshot and analytics',
@@ -40,6 +66,12 @@ const destinations = [
     detail: 'Invoices, credit notes and receipt evidence',
     path: '/fiscalization',
     Icon: FileCheck2,
+  },
+  {
+    title: 'Requests',
+    detail: 'Persisted fiscalization requests and execution evidence',
+    path: '/requests',
+    Icon: FileText,
   },
   {
     title: 'G03 Device',
@@ -55,8 +87,14 @@ const destinations = [
   },
   {
     title: 'Monitoring',
-    detail: 'Queue, recovery and system activity',
+    detail: 'Review, reconciliation and derived operational activity',
     path: '/monitoring',
+    Icon: Activity,
+  },
+  {
+    title: 'System health',
+    detail: 'Middleware checks, process counters and worker observations',
+    path: '/health',
     Icon: Activity,
   },
   {

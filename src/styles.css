@@ -148,6 +148,14 @@ a {
   padding: 0 10px;
   display: grid;
   gap: 4px;
+  min-height: 0;
+  overflow-y: auto;
+  flex-shrink: 1;
+}
+.brand,
+.workspace-label,
+.sidebar-bottom {
+  flex-shrink: 0;
 }
 .nav-link {
   height: 39px;
