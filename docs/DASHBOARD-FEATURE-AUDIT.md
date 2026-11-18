@@ -1,4 +1,172 @@
-﻿# Dashboard document compatibility audit
+# Dashboard feature and architecture audit
+
+For the later post-middleware-audit repair, see
+[integration fixes](dashboard-integration-fixes.md) and
+[route compatibility](dashboard-route-compatibility.md). Earlier feature states
+below are historical where superseded: dashboard cancellation is disabled,
+Monitoring uses Overview, and newly configured reads still require actual
+response evidence and namespace confirmation.
+
+## Full feature and architecture audit: 2026-11-18
+
+This opening section records the current audit and implementation results.
+The earlier document compatibility audit is retained
+below as historical evidence. Final changes and executable verification belong in
+[dashboard-implementation-report.md](dashboard-implementation-report.md); endpoint
+confirmation belongs in [gateway-integration-requirements.md](gateway-integration-requirements.md).
+On this Windows checkout the tracked uppercase filename and requested
+`docs/dashboard-feature-audit.md` resolve to the same file; no duplicate is created.
+
+### Scope and status definitions
+
+Git status was inspected before editing. The initial tree had 22 untracked user
+documentation files and no tracked changes; all were preserved. No G11SERVER
+source/runtime, middleware, database or public-gateway configuration is modified.
+No push or deployment is authorized. Historical HTTP observations below are not
+current authenticated verification.
+
+IMPLEMENTED means dashboard behavior and a local contract exist. PARTIAL means
+useful behavior exists but a required capability or live verification is missing.
+MISSING means no supported implementation/contract exists. BROKEN means a visible
+path cannot fulfill its stated behavior at this baseline. Mocked tests and local
+schemas do not establish production integration.
+
+### Architecture map
+
+| Layer                 | Existing implementation                                                                                                                                                                                       |
+| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap             | `src/main.tsx`: React 19, QueryClientProvider, AuthProvider and BrowserRouter. Configured polling, one retry and no focus refetch.                                                                            |
+| Shell/routes          | `src/app/App.tsx`: sidebar/mobile focus handling, topbar/range/refresh, protected routes, login and footer. All 14 required pages exist; unknown paths redirect to overview.                                  |
+| Shared operational UI | `ApiOperationalPages.tsx`: overview, fiscalization, request drawers, passive device diagnostics and settings; production writeback/monitoring delegate to `ApiOperations.tsx`.                                |
+| Documents             | `ApiDocuments.tsx`, `DocumentDetailView.tsx`, `document-contracts.ts`, `document-provisional.ts`: source registers/details, query helpers and bounded projections of supplied source/fiscal fields.           |
+| Workflow history      | `ApiRequests.tsx`, `queries.ts`, `schemas.ts`: invoice/credit-note collections, filter enums, dates, pagination and request drawers.                                                                          |
+| Operations            | `ApiOperations.tsx`, `operation-contracts.ts`: independent writeback table; operational-family controls and explicit unavailable/schema states.                                                               |
+| CU/KRA comparison     | `ReceiptReconciliation.tsx`, `reconciliation-contracts.ts`: exact CU string versus decoded KRA URL invoiceNo. Local comparison neither calls KRA nor changes middleware decisions.                            |
+| G03                   | `G03Device.tsx`, `device-contracts.ts`: current receipt read, preflight warnings, confirmed administrator cancellation and independent verification; passive diagnostics remain separate.                     |
+| Health                | `ApiSystemHealth.tsx`: services/dependency observations, timestamps, optional observability, counters and worker metrics.                                                                                     |
+| Browser client        | `src/lib/api/client.ts`: same-origin cookies, fixed path allowlist, timeout/cancellation, typed errors and response-schema validation. Vite development deliberately disables live transport.                 |
+| Query coordination    | `queries.ts`, `queryKeys.ts` and direct document/operations/G03 queries use TanStack Query; their key prefixes differ.                                                                                        |
+| Dashboard BFF         | Explicit `vercel.json` rewrites select `api/dashboard.ts`; `_lib/dashboard-contracts.ts` defines exact reads/queries/schemas. Thin `api/_dashboard` aliases reuse the same handler.                           |
+| Gateway transport     | `api/_lib/dashboard-gateway.ts`: server authorization, fixed HTTPS Public Gateway, bearer, strict validation, bounded responses/timeouts, redirect rejection, response projection and protected-value checks. |
+| Authentication        | `api/auth/*`, `api/_lib/auth.ts`, `AuthProvider.tsx`: OIDC state/nonce/PKCE/JWT verification, signed Secure/HttpOnly host-only session, current email/role allowlist, logout and expired/forbidden states.    |
+| Build/deployment      | TypeScript/Vite, static `dist` plus Vercel Node functions, API-excluding SPA fallback, security headers and function duration settings. CI runs typecheck, lint, format, tests and build.                     |
+
+The browser sends only its dashboard session to same-origin API handlers. The BFF
+supplies `DASHBOARD_UPSTREAM_TOKEN` only to the configured Public Gateway. G03 has
+an existing trusted user-ID relay backed by the local signed session and the
+server-held bearer. Tokens, upstream configuration,
+Google client secret and signing secrets must stay server-side. There is no direct
+browser-to-middleware or dashboard-to-PostgreSQL connection.
+
+### Required feature inventory after implementation
+
+Every row was traced from route through callers to its BFF definition. Live
+success is not established by source review. Workflow history is not a full Zoho
+document register.
+
+| Required feature / route                | Existing behavior                                                                                                                                                   | Backend/status                                                                                                                                                                                                                 |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Overview `/overview`                    | Aggregate metrics/charts, recent invoice/credit-note history, diagnostics, global date range and unavailable/error/loading states.                                  | **PARTIAL**: overview/history/services fixed GET mappings exist; supplementary manual review unavailable; real compatibility needs verification.                                                                               |
+| Invoices `/invoices`                    | Source register/detail, search, source-status/customer/date/sort filters, pagination, financial fields and supplied fiscal/CU/KRA/timestamp/request/error evidence. | **PARTIAL**: document mappings prepared, optional nested projections provisional. Prior user-observed live acceptance is retained historically; no fresh authenticated payload was available in this mission.                  |
+| Credit notes `/credit-notes`            | Shared register/detail/filters, lines/taxes, original-invoice arrays/flat fallbacks and independent fiscal/request/writeback evidence.                              | **PARTIAL**: credit-note mappings prepared; original invoice references render only supplied values; live gateway and joined fiscal evidence unverified.                                                                       |
+| Fiscalization `/fiscalization`          | Persisted history, type/status/transmission/reconciliation/writeback filters, dates, paging, CSV and request drawer.                                                | **PARTIAL**: history collections enabled; singular workflow details locally disabled. Submission never means confirmed receipt.                                                                                                |
+| Requests `/requests`                    | Persisted invoice/credit-note history, search/status/date filters, page sizes/paging, ID lookup and receipt links.                                                  | **PARTIAL**: collections enabled; request-detail drawer uses disabled singular definitions.                                                                                                                                    |
+| G03 `/device`                           | Current state, Nairobi check time, connectivity/results/VAT observations, passive diagnostics and administrator cancellation with confirmation/verification.        | **PARTIAL**: receipt GET and cancel POST relays implemented/enabled, requiring trusted server identity/signing configuration and gateway support. Passive dashboard/device disabled. No real cancellation is issued for audit. |
+| Writeback `/writeback`                  | Independent operation table, status/type/date filters, paging, request links, retries/provider-exchange counts.                                                     | **PARTIAL**: table/schema exist but BFF writebacks disabled. Mutating retry contract is **MISSING**, not simulated.                                                                                                            |
+| Monitoring `/monitoring`                | Services-backed dependencies, counters, HTTP durations/histograms, worker observations, refresh and operation links; reuses the health renderer.                    | **PARTIAL** pending fresh live compatibility. The baseline link-only metrics defect is corrected; six new tests cover observations, missing/empty metrics, stale failure/recovery, initial error and demo unavailability.      |
+| Manual review `/manual-review`          | List/date/status controls, case-ID lookup and request links.                                                                                                        | **PARTIAL**: list/case BFF disabled; `ApiOperationCollection` uses `z.never()` and has no success renderer. Exact records/auth scope and resolution mutation contract **MISSING**.                                             |
+| CU/KRA reconciliation `/reconciliation` | Source-document invoice/credit-note comparisons, safe links, exact receipt equality, current-page status filtering and evidence.                                    | **PARTIAL**: source reads prepared; whole-register filtering and persisted reconciliation-operation collection unavailable. No KRA verification API call.                                                                      |
+| System events `/events`                 | Derived-event scope, date/document-type controls and history links.                                                                                                 | **PARTIAL**: BFF disabled, validator `z.never()`, no success records. Exact DTO **MISSING**. Generic complete audit log not established by backend contract.                                                                   |
+| Pending operations `/operations`        | Pending-workflow scope and document-type controls.                                                                                                                  | **PARTIAL**: BFF disabled, exact record schema and success renderer unavailable. Unified queue depth unsupported.                                                                                                              |
+| Health `/health`                        | Service/dependency states, check time, process uptime, optional counters/histograms/workers, stale/error/empty distinctions.                                        | **PARTIAL** pending real compatibility: fixed services mapping. Direct health/telemetry aliases deliberately rejected; page correctly uses services.                                                                           |
+| Settings/access `/settings`             | Session/role/adapter, same-origin API/HTTPS/interval and capabilities; shell logout.                                                                                | **PARTIAL**: OIDC/session/allowlist implemented; capabilities disabled. User/role editor and mutation contract **MISSING**; access controlled by server allowlist.                                                             |
+
+### Corrected defects
+
+- **IMPLEMENTED:** global Refresh now includes active middleware, document
+  list/detail and G03 receipt queries; failed refreshes do not stamp success.
+- **IMPLEMENTED:** mobile navigation expands after desktop collapse, and choosing
+  Settings dismisses the menu. Settings reports the effective refresh interval.
+- **IMPLEMENTED:** narrow-screen heading buttons retain their text labels and
+  headings wrap. Browser checks identified the shared style hiding refresh text.
+- **IMPLEMENTED:** clearing CU/KRA comparison filters preserves the selected
+  invoice/credit-note family and resets source filters and pagination.
+- **IMPLEMENTED:** Monitoring uses the existing services response and validated
+  health components, with one page heading. Missing metrics are not zero and
+  failed refreshes label retained observations stale.
+- **IMPLEMENTED:** local blocked-route messages identify the resource and say no
+  upstream request was made. Upstream failures remain separately identifiable.
+
+Focused specialist checks passed: App 26 tests; document/provisional 86 tests;
+gateway/routing 86 tests; operations/health 21 tests. Final combined quality and
+browser checks passed: **756 tests, 8 optional desktop skips**, typecheck, lint,
+formatting, production build and **66 browser assertions** across all fourteen
+routes. The implementation report records commands, evidence and limits. These
+are local tests, not authenticated production evidence.
+
+### Interaction and integrity findings
+
+- **IMPLEMENTED:** shared navigation/protected routes, mobile navigation controls,
+  real transport error/correlation/timeout handling, source filters/sorting/paging,
+  safe verification links and independent source/fiscal/transmission/writeback states.
+- **IMPLEMENTED:** list-pagination and detail-ID/type matching; receipt identifiers
+  stay strings; unavailable fields do not become fabricated status or zero. Only
+  an explicit null fiscalization join means not processed.
+- **IMPLEMENTED:** document validation/loading/unavailable/empty states and labelled
+  stale health observations after refresh errors. Component tests establish local
+  behavior, not successful live middleware integration.
+- **BROKEN at baseline:** topbar Refresh selects `['middleware']` only. Documents
+  use `['dashboard-documents']` / `['dashboard-document-detail']`; G03 uses
+  `['g03-receipt-state']`. Active reads in those families are skipped. Source
+  registers disable polling, so refresh coverage matters.
+- **MISSING contracts:** exact operational/manual-review/event schemas, independent
+  writeback-detail GET, access management and retry/decision mutations. Do not
+  invent routes or arbitrary JSON renderers to conceal these gaps.
+- **PARTIAL verification:** media queries and component tests cover intended
+  responsive behavior; fresh desktop/mobile browser checks and real authenticated
+  data remain acceptance requirements.
+
+### Error origins and date validation
+
+`GATEWAY_ROUTE_UNAVAILABLE` is generated locally by disabled
+`dashboardReadRoutes` definitions after auth/query validation and before any
+upstream fetch. Baseline affected resources: invoice/credit-note/request detail,
+device, capabilities, writebacks, manual-review/case, reconciliation, events and
+operations. This code does not prove an upstream 404, bad bearer or middleware
+failure. Document mappings do attempt upstream GET and report the actual
+upstream/contract error instead.
+
+Local `400 INVALID_QUERY` rejects duplicate/unknown/invalid query parameters,
+bad pagination/statuses and invalid/reversed dates. Overview serialization already
+converts calendar dates to Nairobi offset boundaries; rolling ranges use ISO
+instants. Explicit rewrites strip only their `dashboardResource` selector before
+strict validation. Reproduce historical overview errors through deployed routing
+before assigning a cause; do not loosen validators to hide errors.
+
+### Duplicate and retained implementations
+
+`App.tsx` retains exported legacy/demo Overview, Fiscalization, Device, Writeback,
+Monitoring and SettingsPage implementations and helpers. Current routes use API
+views. Remove none merely for audit: external consumers may use those exports.
+`LegacyApiWriteback`/`LegacyApiMonitoring` remain explicit local mock views.
+`ApiNotifications` has no shell caller; `NotificationCenter` is used instead.
+`ApiDevice` is active: G03 embeds it. Thin handler aliases share one BFF and do
+not create a second gateway. Production never falls back to fixtures; mock imports
+are development-only and require bundle verification. Older reports describing
+disabled document schemas or G03 availability are historical, not current code.
+
+### Remaining production acceptance
+
+Production readiness needs authenticated confirmation per gateway resource, real
+invoice/credit-note retrieval and fiscal joins, writeback and operational records,
+hosted authenticated role/query verification and real service/device evidence.
+Local quality/build and fixture browser checks now pass. Fixes, dated evidence
+and remaining external dependencies are recorded in the implementation report.
+No server change, push or deployment is claimed.
+
+---
+
+## Historical document compatibility audit: 2026-11-17
 
 Audited 2026-11-17 exclusively in
 `C:\Users\pc\Documents\GitHub\zoho-armco-dashboard`.

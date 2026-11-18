@@ -1,4 +1,198 @@
-# Dashboard implementation and deployment verification
+# Dashboard implementation report
+
+The later post-middleware-audit repair is recorded in
+[dashboard-integration-fixes.md](dashboard-integration-fixes.md), with current
+[route evidence](dashboard-route-compatibility.md) and
+[test results](dashboard-test-results.md). Those records supersede earlier
+integration assumptions below. Cancellation is now disabled in the dashboard;
+the canonical namespace awaits the transferred G11SERVER route matrix.
+
+## Current audit and implementation mission — 2026-11-18
+
+This section records the current request. The report below it is retained
+historical evidence from earlier work; its push/deployment authorization does
+not apply to this mission. No push, deployment, production configuration change,
+G11SERVER modification, fiscalization, writeback or device cancellation has been
+performed in this mission.
+
+**Result:** dashboard fixes and local production checks pass. Production
+readiness is not established: operational gateway contracts and fresh
+authenticated data verification remain outstanding.
+
+The starting checkout was commit `4663dbf`, with no tracked modifications and
+22 untracked user documentation files. Those user files are preserved. All work
+is confined to the dashboard repository. Seven specialist agents performed work
+in bounded stages within the available agent slots: architecture, UI, documents,
+operations, API integration, testing and Vercel preparation.
+
+### Deliverables and initial findings
+
+- [Feature audit](DASHBOARD-FEATURE-AUDIT.md): architecture, all fourteen required
+  pages, implementation classifications, existing components, duplicate/demo
+  paths and backend limitations. Windows resolves this requested name to the
+  existing tracked `DASHBOARD-FEATURE-AUDIT.md` file.
+- [Gateway integration requirements](gateway-integration-requirements.md): each
+  existing frontend caller, local route, documented upstream candidate, method,
+  query, authentication, executable schema, errors and individual confirmation
+  requests for G11SERVER. Prepared for handoff; no external team message was sent.
+- This report: current changes, actual verification and remaining release gates.
+
+All required routes already existed. Rebuilding them would discard working
+behavior. Supported reads include overview, persisted invoice/credit-note
+histories, services and prepared source-document registers/details. Separate
+fiscal receipt evidence, transmission, reconciliation and writeback states are
+preserved. Several operational reads remain explicitly disabled because the
+current Public Gateway exposure and/or exact response DTOs are unconfirmed.
+Manual review, system events and pending operations lack a verified success
+contract; an unavailable view does not fulfill the production records criterion.
+
+### Implemented corrections
+
+- Global Refresh includes active source-document list/detail and G03 receipt
+  queries, in addition to middleware queries. Failed refreshes retain an error
+  outcome rather than updating the successful-refresh timestamp.
+- Opening mobile navigation expands a previously collapsed desktop sidebar;
+  choosing Settings closes the mobile menu. Settings displays the effective
+  clamped refresh interval.
+- Mobile page actions keep readable text labels and wrap when needed. Browser
+  verification exposed the shared heading rule hiding Requests refresh text;
+  text-only telemetry/writeback actions were affected by the same rule.
+- Clearing CU/KRA comparison filters preserves the chosen invoice or credit-note
+  family and clears its source filters and pagination.
+- Monitoring now displays dependency observations, counters, HTTP duration
+  histograms and worker evidence from the existing services endpoint, reusing
+  the validated health renderer. Missing, empty, stale and unavailable metrics
+  remain distinct, and the operation directory remains accessible.
+- A locally blocked `GATEWAY_ROUTE_UNAVAILABLE` now identifies the requested
+  resource and explicitly states that no upstream request occurred. The error is
+  retained. Tests distinguish it from a real forwarded 401/403/404/503 using
+  `upstreamStatus`.
+
+### Changed files in this mission
+
+| Files                                                                                 | Purpose                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `src/app/App.tsx`, `App.test.tsx`                                                     | Complete active-read refresh coverage, mobile navigation and regressions                   |
+| `src/features/api/ApiDocuments.tsx`, `ApiDocuments.test.tsx`                          | Preserve document family when resetting comparison filters                                 |
+| `src/features/api/ApiOperations.tsx`, `ApiOperations.test.tsx`, `ApiSystemHealth.tsx` | Services-backed Monitoring and observation/error/freshness tests                           |
+| `src/features/api/ApiOperationalPages.tsx`, `src/styles.css`                          | Effective settings interval and readable narrow-screen actions                             |
+| `api/_lib/dashboard-gateway.ts`, `dashboard-operations-gateway.test.ts`               | Identify local route restrictions without hiding upstream failures                         |
+| `scripts/verify-live-gateway.mjs`, `scripts/verify-dashboard-browser.mjs`             | Distinguish attempted contracts from local blocks and cover all required responsive routes |
+| This report, feature audit, gateway requirements and deployment-readiness report      | Reviewable evidence and remaining integration contracts                                    |
+
+### Error investigation
+
+`GATEWAY_ROUTE_UNAVAILABLE` is generated by the BFF for entries deliberately
+marked unavailable in `api/_lib/dashboard-contracts.ts`, before network access.
+It does not establish a missing upstream route or failed service credential.
+Forwarded failures retain a safe request ID and upstream status; upstream
+401/403 becomes 502 while the valid local session is retained. The integration
+requirements explain how to distinguish all four causes requested by the user.
+
+The historical overview `400 INVALID_QUERY` was caused by a Vercel catch-all
+injecting routing parameters into a strict application query. The existing
+consolidated static function consumes only the fixed `dashboardResource`
+selector; regression tests preserve date serialization, range checks and
+rejection of unknown/duplicate/injected parameters. That fix is preserved.
+
+### Verification and live access
+
+The initial observed verification run passed TypeScript and **744 tests, with 8
+optional desktop tests skipped** (30 passing test files, one skipped). Specialists
+were working concurrently, so this is not a claim of a pristine baseline run.
+Focused specialist verification passed App (26),
+document/provisional (86), gateway/routing (86), and operations/health (21)
+tests. These suites overlap and are not additive test totals.
+
+Final combined checks after all application changes:
+
+| Check                                               | Current result                                                                                        |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `pnpm.cmd run typecheck`                            | PASS                                                                                                  |
+| `pnpm.cmd run lint`                                 | PASS                                                                                                  |
+| `pnpm.cmd run format:check`                         | PASS; documentation is formatted again after final evidence edits                                     |
+| `pnpm.cmd test`                                     | PASS: **756 passed, 8 skipped**, 30 passing files and one skipped file                                |
+| `pnpm.cmd run build`                                | PASS: TypeScript and Vite production output                                                           |
+| Diagnostic script lint and `git diff --check`       | PASS                                                                                                  |
+| Native PowerShell contract-inventory companion test | PASS: markers, exclusions, no source disclosure, read-only behavior, missing roots, bounded traversal |
+| Local responsive browser checks                     | PASS: **66 assertions**, all 14 routes, zero failures                                                 |
+
+The eight skipped tests are explicit opt-in desktop middleware checks, not
+successful G11SERVER integration tests. The suite includes controlled BFF/auth,
+query/routing, contracts, response validation, UI/error behavior and the actual
+production-bundle server-secret canary check. No production secret is used in
+those tests. The build retains an existing large-JavaScript-chunk warning
+(main bundle approximately 1.12 MB, 327 KB gzip); it is not a build failure.
+
+Responsive browser verification uses explicitly labeled local fixtures. It
+found the hidden mobile heading-action labels, which were fixed in shared CSS.
+The successful rerun verified all fourteen expected route headings, contained
+mobile layouts, readable text actions, desktop-collapse to mobile expansion,
+Settings dismissal, request details/Escape, unavailable document views, invalid
+dates, zero uncaught runtime exceptions and zero API calls in demo mode.
+Its result and screenshots are in
+`.browser-validation-VSHteN/artifacts.tmp/results.json` inside this checkout.
+Desktop and mobile representative screenshots were visually reviewed. These
+local ignored artifacts contain only fixture evidence; no fixture run is
+evidence of live gateway data.
+
+The navigation screenshot captured an intermediate slide-animation frame.
+The diagnostic now waits for the menu to settle onscreen before capture, but
+that final diagnostic-only timing adjustment was not rerun after its launch was
+interrupted. The 66-check application result remains the completed browser run;
+the navigation screenshot is not proof of its final visual position.
+
+The read-only live diagnostic was attempted with the existing Vercel CLI:
+
+```powershell
+node <existing-vercel-cli>/vc.js env run --project zoho-armco-dashboard --environment production -- node scripts/verify-live-gateway.mjs
+```
+
+The sandbox network attempt failed. The approved network retry reached Vercel,
+which reported that three protected Production secret values cannot be pulled.
+The verifier stopped at its configuration guard before any authenticated gateway
+read. No credential value was printed or written to a local file. This is a
+credential-availability block, not evidence that the gateway is unreachable or
+that a route is missing. A request for approved local server-only configuration
+or sanitized G11SERVER route/DTO evidence is pending.
+
+The retained historical report records prior user-observed signed-in Overview
+and Invoices acceptance. That evidence is not a fresh authenticated test of this
+mission, nor proof of the other operational endpoints. Local fixture tests prove
+client/BFF behavior only.
+
+Fresh read-only Vercel inspection confirmed existing production deployment
+`dpl_8q3WpGyoGpJsdgDtk7fs6D6sqNLZ` is READY at baseline commit
+`4663dbf751b686fe0467395bc27d9bcfb196f9a3`, with the expected production alias.
+Current environment names and Production scopes include the gateway and auth
+settings; plaintext values were not inspected. These local changes are not in
+that deployment. The deployment specialist records full evidence and limits in
+[deployment readiness](dashboard-deployment-readiness.md).
+
+Fresh unsigned production probes returned JSON 401 for auth session, overview
+with valid ISO dates, services, capabilities and both source-document lists.
+The private `_dashboard` utility path returned 404; login redirected to
+`accounts.google.com`. This verifies the deployed API/session boundary and
+absence of SPA fallback on those API paths, not successful OAuth login,
+authenticated gateway reads or response DTO compatibility.
+
+### Remaining release gates
+
+Production readiness is **not established**. Confirm every upstream mapping and
+response contract in the integration requirements, then verify authenticated
+real invoice and credit-note lists/details, receipt provenance, request details,
+writeback records, manual review, operational reconciliation, events, pending
+operations, passive device state and capabilities. Validate service and G03
+identity/permission behavior without issuing audit-time mutations. Unsupported
+operations must remain unavailable until their contracts are confirmed.
+
+The source remains prepared for the existing Vercel target, with server-only
+`DASHBOARD_UPSTREAM_BASE_URL=https://g11server.tailaff2e5.ts.net` and
+`DASHBOARD_UPSTREAM_TOKEN`; no browser-to-middleware or database connection is
+introduced. A GitHub push or Vercel deployment requires separate explicit
+authorization under the current request.
+
+## Retained historical implementation and deployment verification
 
 Audit date: 2026-11-18. Repository:
 `C:\Users\pc\Documents\GitHub\zoho-armco-dashboard`.
