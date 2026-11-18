@@ -28,7 +28,7 @@ function Dependency({ title, status, detail }: { title: string; status: string; 
   )
 }
 
-export function ApiSystemHealth() {
+export function ApiSystemHealth({ view = 'health' }: { view?: 'health' | 'monitoring' }) {
   const telemetry = useDashboardServiceHealthQuery(apiMode === 'api')
   const services = telemetry.data
   const data = services?.observability
@@ -36,11 +36,13 @@ export function ApiSystemHealth() {
     <>
       <div className="page-heading">
         <div>
-          <span className="eyebrow">MONITORING</span>
-          <h1>System health</h1>
+          <span className="eyebrow">
+            {view === 'monitoring' ? 'OPERATIONS CONTROL ROOM' : 'MONITORING'}
+          </span>
+          <h1>{view === 'monitoring' ? 'Monitoring' : 'System health'}</h1>
           <p>
-            Middleware checks and process metrics returned through the authenticated dashboard
-            gateway.
+            Limited middleware dependency observations and process metrics returned through the
+            authenticated gateway. These do not establish complete system or physical device health.
           </p>
         </div>
         <button
@@ -258,24 +260,26 @@ export function ApiSystemHealth() {
           </>
         )}
       </section>
-      <section className="panel api-panel system-telemetry">
-        <div className="panel-heading">
-          <h2>Other operational signals</h2>
-        </div>
-        <div className="system-check">
-          <p>
-            Fiscal readiness and physical device health remain unverified. Events are derived from
-            durable operational evidence; pending operations do not form a unified queue.
-          </p>
-          <div className="system-links">
-            <Link to="/device">Device availability</Link>
-            <Link to="/monitoring">Review and reconciliation availability</Link>
-            <Link to="/events">Derived operational events</Link>
-            <Link to="/operations">Pending operations</Link>
-            <Link to="/requests">Inspect persisted requests</Link>
+      {view === 'health' && (
+        <section className="panel api-panel system-telemetry">
+          <div className="panel-heading">
+            <h2>Other operational signals</h2>
           </div>
-        </div>
-      </section>
+          <div className="system-check">
+            <p>
+              Fiscal readiness and physical device health remain unverified. Events are derived from
+              durable operational evidence; pending operations do not form a unified queue.
+            </p>
+            <div className="system-links">
+              <Link to="/device">Device availability</Link>
+              <Link to="/monitoring">Review and reconciliation availability</Link>
+              <Link to="/events">Derived operational events</Link>
+              <Link to="/operations">Pending operations</Link>
+              <Link to="/requests">Inspect persisted requests</Link>
+            </div>
+          </div>
+        </section>
+      )}
     </>
   )
 }

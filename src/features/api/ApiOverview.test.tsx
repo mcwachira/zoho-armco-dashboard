@@ -25,6 +25,7 @@ function json(body: unknown, status = 200) {
 async function mountOverview(
   overviewResponse: (url: URL) => Response | Promise<Response>,
   range: GlobalDateRange = '24h',
+  route = '/overview',
 ) {
   vi.stubEnv('DEV', false)
   vi.stubEnv('VITE_DATA_MODE', 'api')
@@ -45,7 +46,7 @@ async function mountOverview(
         })
       }
     >
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[route]}>
         <ApiOverview range={range} />
       </MemoryRouter>
     </QueryClientProvider>,
@@ -54,6 +55,42 @@ async function mountOverview(
 }
 
 describe('Overview date requests and existing response presentation', () => {
+  it('does not request overview or histories for an invalid applied custom range', async () => {
+    const fetch = await mountOverview(
+      () => {
+        throw new Error('An invalid date range must not reach the transport.')
+      },
+      '24h',
+      '/overview?createdFrom=2026-11-18&createdTo=2026-11-01',
+    )
+    expect(screen.getByRole('alert')).toHaveTextContent('ordered and no longer than 366 days')
+    expect(
+      fetch.mock.calls.some(([path]) =>
+        /\/api\/dashboard\/(overview|invoices|credit-notes)\?/.test(path),
+      ),
+    ).toBe(false)
+    expect(screen.queryByText('FISCALIZATION REQUESTS')).not.toBeInTheDocument()
+  })
+
+  it('uses custom Nairobi dates for overview and history requests', async () => {
+    const fetch = await mountOverview(
+      (url) =>
+        json(
+          mockOverview(url.searchParams.get('createdFrom')!, url.searchParams.get('createdTo')!),
+        ),
+      '24h',
+      '/overview?createdFrom=2026-11-01&createdTo=2026-11-18',
+    )
+    await screen.findByText('FISCALIZATION REQUESTS')
+    for (const [path] of fetch.mock.calls.filter(([path]) =>
+      /\/api\/dashboard\/(overview|invoices|credit-notes)\?/.test(path),
+    )) {
+      const params = new URL(path, 'https://dashboard.test').searchParams
+      expect(params.get('createdFrom')).toBe('2026-11-01T00:00:00.000+03:00')
+      expect(params.get('createdTo')).toBe('2026-11-18T23:59:59.999+03:00')
+      expect(params.has('from') || params.has('to')).toBe(false)
+    }
+  })
   it('advances rolling date bounds during polling and an explicit dashboard refresh', async () => {
     vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] })
     vi.setSystemTime(new Date('2026-11-18T12:00:00.000Z'))

@@ -2632,6 +2632,7 @@ code {
   }
   .page-heading {
     align-items: flex-start;
+    flex-wrap: wrap;
     gap: 12px;
     margin-bottom: 15px;
   }
@@ -2644,9 +2645,9 @@ code {
     max-width: 300px;
   }
   .page-heading .button {
-    font-size: 0;
-    width: 33px;
-    padding: 0;
+    font-size: 11px;
+    width: auto;
+    padding: 0 12px;
   }
   .page-heading .button svg {
     flex: none;

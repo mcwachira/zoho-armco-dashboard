@@ -233,7 +233,11 @@ export function ApiDocuments({
             <button className="button secondary" type="submit">
               <Search size={14} /> Search
             </button>
-            <button className="button secondary" type="button" onClick={() => setSearch({})}>
+            <button
+              className="button secondary"
+              type="button"
+              onClick={() => setSearch(reconciliation ? { kind } : {})}
+            >
               Clear filters
             </button>
           </form>

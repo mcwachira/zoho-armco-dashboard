@@ -20,7 +20,7 @@ import {
 } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { toast, Toaster } from 'sonner'
-import { useQueryClient } from '@tanstack/react-query'
+import { useQueryClient, type QueryFilters } from '@tanstack/react-query'
 import {
   Activity,
   AlertCircle,
@@ -86,9 +86,9 @@ import {
 } from '@/features/api/ApiOperationalPages'
 import { ApiRequests } from '@/features/api/ApiRequests'
 import { ApiSystemHealth } from '@/features/api/ApiSystemHealth'
-import { ApiDocuments, ApiReceiptReconciliation } from '@/features/api/ApiDocuments'
+import { ApiDocuments } from '@/features/api/ApiDocuments'
 import { G03Device, G03PreflightWarning } from '@/features/api/G03Device'
-import { ApiOperationCollection } from '@/features/api/ApiOperations'
+import { ApiOperationCollection, ApiReconciliation } from '@/features/api/ApiOperations'
 
 const nav: { label: string; path: string; icon: LucideIcon }[] = [
   { label: 'Overview', path: '/overview', icon: LayoutDashboard },
@@ -130,6 +130,16 @@ const todayLabel = new Intl.DateTimeFormat('en-KE', {
   .format(new Date())
   .toUpperCase()
 const DashboardRangeContext = createContext<GlobalDateRange>('24h')
+const activeDashboardReads: QueryFilters = {
+  type: 'active',
+  predicate: ({ queryKey }) =>
+    [
+      'middleware',
+      'dashboard-documents',
+      'dashboard-document-detail',
+      'g03-receipt-state',
+    ].includes(String(queryKey[0])),
+}
 function useDashboardRange() {
   return useContext(DashboardRangeContext)
 }
@@ -228,6 +238,7 @@ function Shell() {
   const queryClient = useQueryClient()
   const [collapsed, setCollapsed] = useState(false)
   const [mobileNav, setMobileNav] = useState(false)
+  const sidebarCollapsed = collapsed && !mobileNav
   const [userOpen, setUserOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
   const [refreshed, setRefreshed] = useState<Date | null>(null)
@@ -293,9 +304,7 @@ function Shell() {
       toast.info('Demo snapshot is local and static; no live API request was made.')
       return
     }
-    const activeReads = queryClient
-      .getQueryCache()
-      .findAll({ queryKey: ['middleware'], type: 'active' })
+    const activeReads = queryClient.getQueryCache().findAll(activeDashboardReads)
     if (!activeReads.length) {
       toast.info('No active middleware reads to refresh.')
       return
@@ -305,10 +314,10 @@ function Shell() {
       // Select active queries only after rolling-window subscribers have committed
       // their new keys, so completion reflects the newly requested date range.
       flushSync(() => window.dispatchEvent(new Event('dashboard:refresh-range')))
-      await queryClient.invalidateQueries({ queryKey: ['middleware'], refetchType: 'active' })
+      await queryClient.invalidateQueries({ ...activeDashboardReads, refetchType: 'active' })
       const hasActiveError = queryClient
         .getQueryCache()
-        .findAll({ queryKey: ['middleware'], type: 'active' })
+        .findAll(activeDashboardReads)
         .some((query) => query.state.status === 'error')
       if (hasActiveError) {
         toast.error(
@@ -324,7 +333,7 @@ function Shell() {
       setRefreshing(false)
     }
   }
-  const sidebarClass = `sidebar ${collapsed ? 'collapsed' : ''} ${mobileNav ? 'mobile-open' : ''}`
+  const sidebarClass = `sidebar ${sidebarCollapsed ? 'collapsed' : ''} ${mobileNav ? 'mobile-open' : ''}`
   return (
     <div className="app-frame">
       <aside className={sidebarClass} id="dashboard-navigation" ref={navigationRef}>
@@ -332,7 +341,7 @@ function Shell() {
           <div className="brand-mark">
             <Activity size={19} />
           </div>
-          {!collapsed && (
+          {!sidebarCollapsed && (
             <div>
               <strong>
                 zoho<span>amarco</span>
@@ -372,7 +381,7 @@ function Shell() {
             <div className="support-icon">
               <CircleHelp size={16} />
             </div>
-            {!collapsed && (
+            {!sidebarCollapsed && (
               <div>
                 <strong>Operator guide</strong>
                 <small>Not available in this workspace</small>
@@ -380,8 +389,10 @@ function Shell() {
             )}
           </div>
           <NavLink
+            onClick={() => setMobileNav(false)}
             className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}
             to="/settings"
+            title="Settings"
           >
             <SettingsIcon size={18} />
             <span>Settings</span>
@@ -395,11 +406,11 @@ function Shell() {
             onClick={() => void logout()}
           >
             <LogOut size={16} aria-hidden="true" />
-            {!collapsed && <span>{loggingOut ? 'Logging out…' : 'Logout'}</span>}
+            {!sidebarCollapsed && <span>{loggingOut ? 'Logging out…' : 'Logout'}</span>}
           </button>
           <div className="side-user">
             <div className="avatar">{avatarLabel}</div>
-            {!collapsed && (
+            {!sidebarCollapsed && (
               <div className="user-info">
                 <strong>{auth.user?.name ?? 'Guest operator'}</strong>
                 <small>{auth.user?.role ?? 'Development session'}</small>
@@ -543,7 +554,7 @@ function Shell() {
                 path="/reconciliation"
                 element={
                   <Protected>
-                    <ApiReceiptReconciliation />
+                    <ApiReconciliation />
                   </Protected>
                 }
               />
@@ -606,7 +617,7 @@ function Shell() {
                 element={
                   <Protected>
                     <G03PreflightWarning />
-                    <ApiMonitoring />
+                    <ApiMonitoring range={globalRange} />
                   </Protected>
                 }
               />

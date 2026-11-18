@@ -960,23 +960,59 @@ async function renderDocuments(
   kind: 'invoice' | 'credit_note',
   entry: string,
   fetch: ReturnType<typeof vi.fn>,
+  reconciliation = false,
 ) {
   vi.stubEnv('DEV', false)
   vi.stubEnv('VITE_DATA_MODE', 'api')
   vi.stubGlobal('fetch', fetch)
-  const { ApiDocuments } = await import('./ApiDocuments')
+  const { ApiDocuments, ApiReceiptReconciliation } = await import('./ApiDocuments')
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
       <MemoryRouter initialEntries={[entry]}>
-        <ApiDocuments kind={kind} />
+        {reconciliation ? <ApiReceiptReconciliation /> : <ApiDocuments kind={kind} />}
       </MemoryRouter>
     </QueryClientProvider>,
   )
 }
 
 describe('document register and detail unavailable states', () => {
+  it.each(['invoice', 'credit_note'] as const)(
+    'keeps the selected %s reconciliation register when clearing filters',
+    async (kind) => {
+      const fetch = vi.fn().mockImplementation(async (url: string) => {
+        const query = new URL(url, 'https://dashboard.invalid').searchParams
+        return Response.json(documentPageFixture([], { page: Number(query.get('page')) }))
+      })
+      await renderDocuments(
+        kind,
+        `/reconciliation?kind=${kind}&search=reference&status=open&page=3&from=2026-11-01&reconciliationStatus=MISMATCH`,
+        fetch,
+        true,
+      )
+      await screen.findByText('No documents found')
+      await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+      expect(screen.getByLabelText('Document type')).toHaveValue(kind)
+      await waitFor(() =>
+        expect(screen.getByLabelText('Document number or customer search')).toHaveValue(''),
+      )
+      expect(screen.getByLabelText('Zoho status')).toHaveValue('')
+      expect(screen.getByLabelText('Document date from (UTC)')).toHaveValue('')
+      expect(screen.getByLabelText('CU/KRA reconciliation (current page)')).toHaveValue('')
+      const resource = kind === 'invoice' ? 'invoices' : 'credit-notes'
+      await waitFor(() =>
+        expect(fetch).toHaveBeenLastCalledWith(
+          `/api/dashboard/documents/${resource}?page=1&pageSize=25`,
+          expect.anything(),
+        ),
+      )
+      expect(
+        fetch.mock.calls.every(([url]) => String(url).includes(`/documents/${resource}?`)),
+      ).toBe(true)
+    },
+  )
+
   it('preserves register filters on the return link from document detail', async () => {
     const fetch = vi.fn(
       async () =>

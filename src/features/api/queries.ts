@@ -204,12 +204,12 @@ export function useDashboardCreditNoteDetailQuery(requestId: string) {
   )
 }
 
-export function useDashboardOverviewQuery(params: DashboardOverviewParams) {
+export function useDashboardOverviewQuery(params: DashboardOverviewParams, enabled = true) {
   return useDashboardRead(
     apiQueryKeys.dashboardOverview(params),
     () => buildDashboardOverviewPath(params),
     dashboardOverviewSchema,
-    Boolean(params.createdFrom && params.createdTo),
+    enabled && Boolean(params.createdFrom && params.createdTo),
   )
 }
 

@@ -54,6 +54,7 @@ import type {
 } from './schemas'
 import { invoiceFiscalizationStatusSchema, creditNoteFiscalizationStateSchema } from './schemas'
 import { ApiOperationsHome, ApiWritebackOperations } from './ApiOperations'
+import { OverviewDateFilters, useOverviewDateRange } from './OverviewDateFilters'
 import './api-operational-pages.css'
 
 type RecordKind = 'invoice' | 'credit_note'
@@ -309,18 +310,28 @@ function formatDuration(seconds: number) {
   return [days ? `${days}d` : '', hours ? `${hours}h` : '', `${minutes}m`].filter(Boolean).join(' ')
 }
 
-export function ApiOverview({ range }: { range: GlobalDateRange }) {
-  const queryRange = useRollingDateRange(range)
-  const query = useDashboardOverviewQuery(queryRange)
+export function ApiOverview({
+  range,
+  view = 'overview',
+}: {
+  range: GlobalDateRange
+  view?: 'overview' | 'monitoring'
+}) {
+  const rollingRange = useRollingDateRange(range)
+  const dateSelection = useOverviewDateRange(rollingRange)
+  const queryRange = dateSelection.range
+  const query = useDashboardOverviewQuery(queryRange, dateSelection.valid)
   const manualReview = useDashboardManualReviewQuery({ page: 1, pageSize: 100 })
-  const recentInvoices = useDashboardInvoiceListQuery({ page: 1, pageSize: 25, ...queryRange })
-  const recentCreditNotes = useDashboardCreditNoteListQuery({
-    page: 1,
-    pageSize: 25,
-    ...queryRange,
-  })
+  const recentInvoices = useDashboardInvoiceListQuery(
+    { page: 1, pageSize: 25, ...queryRange },
+    dateSelection.valid,
+  )
+  const recentCreditNotes = useDashboardCreditNoteListQuery(
+    { page: 1, pageSize: 25, ...queryRange },
+    dateSelection.valid,
+  )
   const health = useDashboardServiceHealthQuery()
-  const overview = query.data
+  const overview = dateSelection.valid ? query.data : undefined
   const available = overview?.availability === 'available' ? overview : null
   const allRequests = available
     ? available.metrics.invoices.totalRequests + available.metrics.creditNotes.totalRequests
@@ -378,10 +389,12 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
       kind: 'credit_note' as const,
     })),
   ]
+    .filter(() => dateSelection.valid)
     .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))
     .slice(0, 6)
-  const recentError = recentInvoices.error ?? recentCreditNotes.error
-  const recentLoading = recentInvoices.isLoading || recentCreditNotes.isLoading
+  const recentError = dateSelection.valid ? (recentInvoices.error ?? recentCreditNotes.error) : null
+  const recentLoading =
+    dateSelection.valid && (recentInvoices.isLoading || recentCreditNotes.isLoading)
   const chartData = available
     ? [
         {
@@ -451,19 +464,20 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
   return (
     <>
       <Heading
-        eyebrow="Operational overview"
-        title="Overview"
+        eyebrow={view === 'monitoring' ? 'Operational monitoring' : 'Operational overview'}
+        title={view === 'monitoring' ? 'Monitoring' : 'Overview'}
         description={
           localMockApiEnabled
             ? 'Illustrative local fixture aggregates and sample dependency diagnostics.'
             : 'Aggregated persisted fiscalization data and current dependency diagnostics.'
         }
-        action={<Freshness value={query.lastUpdatedAt} />}
+        action={<Freshness value={dateSelection.valid ? query.lastUpdatedAt : null} />}
       />
+      <OverviewDateFilters error={dateSelection.error} />
       <DataState
-        isLoading={query.isLoading}
-        isError={query.isError}
-        hasData={Boolean(query.data)}
+        isLoading={dateSelection.valid && query.isLoading}
+        isError={dateSelection.valid && query.isError}
+        hasData={Boolean(overview)}
         error={query.error}
         refetch={query.refetch}
       />
@@ -474,8 +488,8 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
         error={manualReview.error}
         refetch={manualReview.refetch}
       />
-      {query.data?.availability === 'unavailable' && (
-        <Availability title="Overview aggregation unavailable" description={query.data.reason} />
+      {overview?.availability === 'unavailable' && (
+        <Availability title="Overview aggregation unavailable" description={overview.reason} />
       )}
       <div className="stat-grid api-stat-grid">
         <Metric
@@ -2443,8 +2457,14 @@ function LegacyApiWriteback({ range }: { range: GlobalDateRange }) {
   )
 }
 
-export function ApiMonitoring() {
-  return localMockApiEnabled ? <LegacyApiMonitoring /> : <ApiOperationsHome />
+export function ApiMonitoring({ range = '24h' }: { range?: GlobalDateRange }) {
+  return localMockApiEnabled ? (
+    <LegacyApiMonitoring />
+  ) : (
+    <ApiOperationsHome>
+      <ApiOverview range={range} view="monitoring" />
+    </ApiOperationsHome>
+  )
 }
 
 function LegacyApiMonitoring() {
@@ -2688,7 +2708,7 @@ export function ApiSettings() {
             />
             <DetailLine
               label="Refresh interval"
-              value={`${Math.round(Number(import.meta.env.VITE_REFRESH_INTERVAL_MS || 30000) / 1000)} seconds`}
+              value={`${Math.round(refreshIntervalMs / 1000)} seconds`}
             />
             <DetailLine
               label="HTTPS"

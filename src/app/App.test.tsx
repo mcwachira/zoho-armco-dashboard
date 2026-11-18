@@ -6,7 +6,9 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 
-afterEach(() => {
+afterEach(async () => {
+  const { toast } = await import('sonner')
+  act(() => toast.dismiss())
   cleanup()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -37,6 +39,69 @@ async function renderApp(path: string, authMode = 'development-mock') {
 }
 
 describe('application route smoke checks', () => {
+  it.each([
+    ['/invoices', '/api/dashboard/documents/invoices'],
+    ['/invoices?id=fixture-invoice-42', '/api/dashboard/documents/invoice'],
+    ['/device', '/api/device/g03/current-receipt'],
+  ])(
+    'refreshes the active %s read and reports a failed refresh',
+    async (path, readPath) => {
+      vi.stubEnv('DEV', false)
+      vi.stubEnv('VITE_DATA_MODE', 'api')
+      const { invoiceDocumentFixture, documentPageFixture } =
+        await import('@/features/api/__fixtures__/document-fixtures')
+      const { closedReceipt } = await import('@/features/api/__fixtures__/g03-receipt-fixtures')
+      let reads = 0
+      const json = (value: unknown, status = 200) =>
+        new Response(JSON.stringify(value), {
+          status,
+          headers: { 'Content-Type': 'application/json' },
+        })
+      const fetcher = vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(String(input), 'https://dashboard.test')
+        if (url.pathname === '/api/auth/session')
+          return json({
+            user: { email: 'reader@example.test', role: 'viewer' },
+            expiresAt: Date.now() + 60_000,
+          })
+        if (url.pathname === readPath) {
+          reads += 1
+          if (reads > 1)
+            return json(
+              { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'Refresh unavailable' } },
+              503,
+            )
+          if (readPath === '/api/device/g03/current-receipt') return json(closedReceipt)
+          if (readPath === '/api/dashboard/documents/invoice')
+            return json({
+              documentType: 'invoice',
+              zohoDocumentId: invoiceDocumentFixture.invoice_id,
+              document: invoiceDocumentFixture,
+              fiscalizationRequest: null,
+            })
+          return json(documentPageFixture([invoiceDocumentFixture]))
+        }
+        return json({ error: { code: 'UPSTREAM_UNAVAILABLE', message: 'Read unavailable' } }, 503)
+      })
+      vi.stubGlobal('fetch', fetcher)
+      const { queryClient } = await renderApp(path, 'google-oidc')
+      await waitFor(() => expect(reads).toBe(1))
+      await waitFor(() => expect(queryClient.isFetching()).toBe(0), { timeout: 5000 })
+      await userEvent
+        .setup()
+        .click(screen.getByRole('button', { name: 'Refresh active middleware reads' }))
+      await waitFor(() => expect(reads).toBe(2))
+      expect(
+        await screen.findByText(
+          'Some dashboard reads could not be refreshed. Each page reports its data availability.',
+        ),
+      ).toBeInTheDocument()
+      expect(screen.queryByText(/Reads refreshed/)).not.toBeInTheDocument()
+      queryClient.clear()
+    },
+    15_000,
+  )
+
   it('waits for the refreshed date range and does not record success when its response fails', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
@@ -126,12 +191,31 @@ describe('application route smoke checks', () => {
     )
     const trigger = screen.getByRole('button', { name: 'Open navigation' })
     await user.click(trigger)
+    expect(document.getElementById('dashboard-navigation')).not.toHaveClass('collapsed')
     expect(trigger).toHaveAttribute('aria-expanded', 'true')
     expect(screen.getByRole('button', { name: 'Close navigation' })).toBeInTheDocument()
     await user.keyboard('{Escape}')
     expect(screen.queryByRole('button', { name: 'Close navigation' })).not.toBeInTheDocument()
     expect(trigger).toHaveAttribute('aria-expanded', 'false')
     expect(trigger).toHaveFocus()
+    queryClient.clear()
+  }, 15_000)
+
+  it('closes the mobile navigation after opening Settings and displays the effective refresh interval', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'mock')
+    vi.stubEnv('VITE_REFRESH_INTERVAL_MS', '1000')
+    const user = userEvent.setup()
+    const { queryClient } = await renderApp('/overview')
+    expect(await screen.findByRole('heading', { name: 'Overview' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Open navigation' }))
+    await user.click(screen.getByRole('link', { name: 'Settings' }))
+    expect(await screen.findByRole('heading', { name: 'Settings' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Close navigation' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Open navigation' })).toHaveAttribute(
+      'aria-expanded',
+      'false',
+    )
+    expect(screen.getByText('Refresh interval').nextElementSibling).toHaveTextContent('10 seconds')
     queryClient.clear()
   }, 15_000)
 
