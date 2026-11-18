@@ -47,14 +47,10 @@ export async function getCurrentReceiptState<T>(
 ): Promise<T> {
   return dashboardJson('/api/device/g03/current-receipt', schema, signal)
 }
-export async function cancelOpenReceipt<T>(schema: ZodType<T>, signal?: AbortSignal): Promise<T> {
-  return dashboardJson('/api/device/g03/cancel-receipt', schema, signal, 'POST')
-}
 async function dashboardJson<T>(
   path: string,
   schema: ZodType<T>,
   signal?: AbortSignal,
-  method: 'GET' | 'POST' = 'GET',
 ): Promise<T> {
   if (apiMode !== 'api')
     throw new ApiError(
@@ -70,15 +66,11 @@ async function dashboardJson<T>(
       undefined,
       'configuration',
     )
-  const deviceRead = path === '/api/device/g03/current-receipt' && method === 'GET'
-  const deviceCancel = path === '/api/device/g03/cancel-receipt' && method === 'POST'
-  if (method !== 'GET' && !deviceCancel)
-    throw new ApiError('This action is not exposed by the dashboard.', undefined, 'configuration')
-  if (!path.startsWith('/api/dashboard/') && !deviceRead && !deviceCancel)
+  const deviceRead = path === '/api/device/g03/current-receipt'
+  if (!path.startsWith('/api/dashboard/') && !deviceRead)
     throw new ApiError('Only dashboard read routes are available.', undefined, 'configuration')
   if (
     !deviceRead &&
-    !deviceCancel &&
     !/^\/api\/dashboard\/(overview|invoices|invoice|credit-notes|credit-note|services|device|capabilities|writebacks|manual-review|manual-review-case|reconciliation|events|operations|documents\/(?:invoices|invoice|credit-notes|credit-note)|requests|request|writeback|health|telemetry)(\?|$)/.test(
       path,
     )
@@ -90,39 +82,21 @@ async function dashboardJson<T>(
     )
   if (signal?.aborted) throw new ApiError('Request was cancelled.', undefined, 'cancelled')
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), deviceCancel ? 25_000 : settings.timeoutMs)
+  const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
   const abortRequest = () => controller.abort()
   signal?.addEventListener('abort', abortRequest, { once: true })
   try {
     const response = await fetch(`${settings.baseUrl}${path}`, {
-      method,
+      method: 'GET',
       headers: {
         Accept: 'application/json',
-        ...(deviceCancel ? { 'Content-Type': 'application/json' } : {}),
       },
-      ...(deviceCancel ? { body: '{}' } : {}),
       signal: controller.signal,
       credentials: 'same-origin',
       cache: 'no-store',
       redirect: 'error',
     })
     if (!response.ok) {
-      // Domain failures retain their actual cancellation/verification evidence.
-      if (deviceCancel && response.status !== 401) {
-        try {
-          const result = schema.safeParse(await response.clone().json())
-          if (
-            result.success &&
-            result.data &&
-            typeof result.data === 'object' &&
-            'success' in result.data &&
-            result.data.success === false
-          )
-            return result.data
-        } catch {
-          /* Generic errors use the existing API error envelope. */
-        }
-      }
       const kind =
         response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : 'http'
       if (response.status === 401 && typeof window !== 'undefined') {

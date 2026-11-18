@@ -1,8 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { dashboardReadRoutes } from './dashboard-contracts.js'
+import { dashboardGatewayNamespace, dashboardReadRoutes } from './dashboard-contracts.js'
 import type { DocumentDetail } from '../../src/features/api/document-contracts.js'
-import { receiptStateSchema, cancelReceiptSchema } from '../../src/features/api/device-contracts.js'
+import { receiptStateSchema } from '../../src/features/api/device-contracts.js'
 import {
   requireDashboardSession,
   type DashboardSession,
@@ -186,9 +186,17 @@ export async function handleDashboardRequest(
     return reply(
       503,
       definition.unavailableCode ?? 'CONTRACT_SCHEMA_UNAVAILABLE',
-      definition.unavailable ?? 'This gateway resource is unavailable.',
+      definition.unavailableCode === 'GATEWAY_ROUTE_UNAVAILABLE'
+        ? `The dashboard has no confirmed Public Gateway contract for ${resource}. No upstream request was made.`
+        : (definition.unavailable ?? 'This gateway resource is unavailable.'),
     )
   const schema = definition.response
+  if (!schema)
+    return reply(
+      503,
+      'CONTRACT_SCHEMA_UNAVAILABLE',
+      `The Public Gateway route for ${resource} is configured, but its response schema is not available to the dashboard. No upstream request was made.`,
+    )
 
   // Keep route construction constrained to this fixed GET allowlist. No caller
   // supplied path is ever forwarded to an upstream service.
@@ -206,10 +214,11 @@ export async function handleDashboardRequest(
     )
 
   const documentId = (queryResult.data as { id?: string }).id
-  const upstreamPath = definition.documentDetail
-    ? definition.path.replace('{id}', encodeURIComponent(documentId!))
-    : definition.path
-  const target = new URL(upstreamPath, baseUrl)
+  const upstreamPath =
+    definition.documentDetail || definition.requestDetail
+      ? definition.path.replace('{id}', encodeURIComponent(documentId!))
+      : definition.path
+  const target = new URL(dashboardGatewayNamespace + upstreamPath, baseUrl)
   const protectedValues = [
     token,
     baseUrl.origin,
@@ -316,16 +325,6 @@ export async function handleDashboardRequest(
             : `The middleware gateway returned HTTP ${upstream.status}.`
       return reply(status, code, message, upstream.status)
     }
-    if (!schema) {
-      // A future route must supply an explicit projection before any provider
-      // JSON can be returned. Document routes use isolated provisional bindings.
-      void upstream.body?.cancel().catch(() => undefined)
-      return reply(
-        503,
-        'CONTRACT_SCHEMA_UNAVAILABLE',
-        'The dashboard response contract is unavailable for this resource.',
-      )
-    }
     let payload: unknown
     try {
       payload = await readBoundedJson(upstream, controller.signal)
@@ -344,6 +343,18 @@ export async function handleDashboardRequest(
         'UPSTREAM_CONTRACT_ERROR',
         'The middleware response did not match the dashboard contract.',
       )
+    if (definition.requestDetail) {
+      const detail = parsed.data as { request: { requestId: string; documentType: string } }
+      if (
+        detail.request.requestId !== documentId ||
+        detail.request.documentType !== definition.requestDetail
+      )
+        return reply(
+          502,
+          'UPSTREAM_CONTRACT_ERROR',
+          'The middleware returned a different request identity.',
+        )
+    }
     if (definition.documentDetail) {
       const detail = parsed.data as DocumentDetail
       const expectedType = resource === 'documents/invoice' ? 'invoice' : 'credit_note'
@@ -459,7 +470,7 @@ function relayUserId(email: string, env: Record<string, string | undefined>): st
   }
 }
 
-/** Two fixed device routes reuse this gateway's auth, URL and bounded-read utilities. */
+/** Receipt reads only. The former control endpoint is retained as an explicit denial. */
 export async function handleG03Request(
   req: ApiRequest,
   res: ApiResponse,
@@ -482,48 +493,16 @@ export async function handleG03Request(
 
   const session = await dependencies.authorize(req, res)
   if (!session) return
+  if (cancel)
+    return reply(
+      403,
+      'G03_CANCELLATION_DISABLED',
+      'G03 receipt cancellation is disabled pending a separate authorization security review.',
+    )
   const role = Object.prototype.hasOwnProperty.call(middlewareRoles, session.role)
     ? middlewareRoles[session.role]
     : undefined
-  if (!role || (cancel && role !== 'administrator'))
-    return reply(
-      403,
-      'ADMINISTRATOR_REQUIRED',
-      'An authenticated dashboard administrator is required.',
-    )
-
-  if (cancel) {
-    const origin = req.headers.origin
-    const expectedOrigin = dependencies.env.DASHBOARD_AUTH_URL
-    if (!expectedOrigin)
-      return reply(
-        503,
-        'AUTH_ORIGIN_UNCONFIGURED',
-        'Configure DASHBOARD_AUTH_URL for administrator actions.',
-      )
-    if (
-      typeof origin !== 'string' ||
-      origin !== expectedOrigin ||
-      (req.headers['sec-fetch-site'] !== undefined &&
-        req.headers['sec-fetch-site'] !== 'same-origin')
-    )
-      return reply(403, 'INVALID_ORIGIN', 'Cancellation must originate from this dashboard.')
-    const contentType = req.headers['content-type']
-    if (typeof contentType !== 'string' || !/^application\/json(?:\s*;|$)/i.test(contentType))
-      return reply(415, 'INVALID_CONTENT_TYPE', 'Cancellation requires application/json.')
-    let body = req.body === undefined ? {} : req.body
-    if (typeof body === 'string') {
-      if (Buffer.byteLength(body, 'utf8') > 1024)
-        return reply(400, 'INVALID_BODY', 'Cancellation requires an empty JSON object.')
-      try {
-        body = body.trim() ? JSON.parse(body) : {}
-      } catch {
-        return reply(400, 'INVALID_BODY', 'Cancellation requires an empty JSON object.')
-      }
-    }
-    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 0)
-      return reply(400, 'INVALID_BODY', 'Cancellation requires an empty JSON object.')
-  }
+  if (!role) return reply(403, 'FORBIDDEN', 'An authenticated dashboard user is required.')
 
   const userId = relayUserId(session.email, dependencies.env)
   if (!userId)
@@ -584,26 +563,19 @@ export async function handleG03Request(
     }
   }
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), cancel ? 20_000 : 8_000)
+  const timeout = setTimeout(() => controller.abort(), 8_000)
   try {
     const upstream = await dependencies.fetch(
-      new URL(
-        cancel
-          ? '/integrations/device/g03/cancel-receipt'
-          : '/integrations/device/g03/current-receipt',
-        base,
-      ),
+      new URL('/integrations/device/g03/current-receipt', base),
       {
-        method,
+        method: 'GET',
         headers: {
           Accept: 'application/json',
           Authorization: 'Bearer ' + token,
           'x-dashboard-user-id': userId,
           'x-dashboard-role': role,
           'X-Request-ID': requestId,
-          ...(cancel ? { 'Content-Type': 'application/json' } : {}),
         },
-        ...(cancel ? { body: '{}' } : {}),
         signal: controller.signal,
         redirect: 'error',
         cache: 'no-store',
@@ -623,17 +595,8 @@ export async function handleG03Request(
         'The device gateway returned invalid or oversized JSON.',
       )
     }
-    const schema = cancel ? cancelReceiptSchema : receiptStateSchema
-    const result = schema.safeParse(payload)
-    if (
-      result.success &&
-      (upstream.ok ||
-        (cancel &&
-          upstream.status >= 400 &&
-          upstream.status !== 401 &&
-          'success' in result.data &&
-          result.data.success === false))
-    ) {
+    const result = receiptStateSchema.safeParse(payload)
+    if (result.success && upstream.ok) {
       if (protectedData(result.data) || internalDiagnostic(result.data))
         return reply(
           502,

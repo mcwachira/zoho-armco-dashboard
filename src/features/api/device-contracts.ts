@@ -1,10 +1,10 @@
 import { z } from 'zod'
 
-// The G03 routes now have an explicit server-side relay contract.
+// Receipt reads remain available; cancellation is disabled pending security review.
 export const g03ReceiptIntegration = {
   monitoringAvailable: true,
-  cancellationAvailable: true,
-  reason: '',
+  cancellationAvailable: false,
+  reason: 'G03 cancellation is disabled pending a separate authorization security review.',
 } as const
 
 const text = z.string().max(20_000)

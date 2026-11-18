@@ -188,7 +188,7 @@ describe('G03 proxy uses the existing signed dashboard session', () => {
     expect(result.upstream).not.toHaveBeenCalled()
   })
 
-  it.each(['operator', 'viewer'] as const)(
+  it.each(['admin', 'operator', 'viewer'] as const)(
     'rejects %s cancellation despite forged identity headers',
     async (role) => {
       const result = await invoke({
@@ -261,67 +261,22 @@ describe('G03 proxy uses the existing signed dashboard session', () => {
   })
 })
 
-describe('G03 administrator POST and CSRF boundary', () => {
-  it('sends exactly one empty JSON POST with server-derived administrator identity', async () => {
-    const result = await invoke({ cancel: true, body: '{}' })
-    expect(result.status()).toBe(200)
-    expect(result.body()).toEqual(cancellationFixture('cancelled_and_verified'))
-    expect(result.upstream).toHaveBeenCalledTimes(1)
-    expect(result.upstream).toHaveBeenCalledWith(
-      new URL('https://gateway.example.test/integrations/device/g03/cancel-receipt'),
-      expect.objectContaining({
-        method: 'POST',
-        body: '{}',
-        redirect: 'error',
-        headers: expect.objectContaining({
-          Authorization: 'Bearer ' + credential,
-          'Content-Type': 'application/json',
-          'x-dashboard-user-id': ids[emails.admin],
-          'x-dashboard-role': 'administrator',
-        }),
-      }),
-    )
+describe('G03 cancellation is disabled pending security review', () => {
+  it.each([
+    { body: '{}' },
+    { headers: { origin: undefined } },
+    { headers: { origin: 'https://attacker.invalid' } },
+    { headers: { 'content-type': 'text/plain' } },
+    { body: { role: 'administrator', userId: 'spoof' } },
+    { env: { DASHBOARD_UPSTREAM_TOKEN: undefined, DASHBOARD_USER_IDS: undefined } },
+  ])('blocks every authorized administrator cancellation before forwarding %#', async (options) => {
+    const result = await invoke({ ...options, cancel: true })
+    expect(result.status()).toBe(403)
+    expect(result.body()).toMatchObject({ error: { code: 'G03_CANCELLATION_DISABLED' } })
+    expect(result.upstream).not.toHaveBeenCalled()
+    expect(result.headers['cache-control']).toBe('no-store')
   })
 
-  it.each([
-    { origin: undefined },
-    { origin: 'null' },
-    { origin: 'https://attacker.invalid' },
-    { origin: [origin, 'https://attacker.invalid'] },
-    { 'sec-fetch-site': 'cross-site' },
-    { 'sec-fetch-site': 'same-site' },
-  ])('rejects missing/foreign Origin and cross-site requests %#', async (headers) => {
-    const result = await invoke({ cancel: true, headers })
-    expect(result.status()).toBe(403)
-    expect(result.upstream).not.toHaveBeenCalled()
-  })
-  it('rejects missing Origin even when Referer looks trusted', async () => {
-    const result = await invoke({
-      cancel: true,
-      headers: { origin: undefined, referer: origin + '/device' },
-    })
-    expect(result.status()).toBe(403)
-    expect(result.upstream).not.toHaveBeenCalled()
-  })
-  it.each([
-    null,
-    [],
-    { confirm: true },
-    { role: 'administrator' },
-    { userId: 'spoof' },
-    '{invalid',
-    '"text"',
-    ' '.repeat(1025),
-  ])('rejects non-empty or invalid cancellation bodies %#', async (body) => {
-    const result = await invoke({ cancel: true, body })
-    expect(result.status()).toBe(400)
-    expect(result.upstream).not.toHaveBeenCalled()
-  })
-  it('requires JSON content type', async () => {
-    const result = await invoke({ cancel: true, headers: { 'content-type': 'text/plain' } })
-    expect(result.status()).toBe(415)
-    expect(result.upstream).not.toHaveBeenCalled()
-  })
   it.each([
     { url: '/api/device/g03/current-receipt?role=administrator' },
     { url: '/api/device/g03/anything' },
@@ -348,31 +303,6 @@ describe('G03 response and transport contract', () => {
     const result = await invoke({ payload: unknownReceipt })
     expect(result.status()).toBe(200)
     expect(result.body()).toEqual(unknownReceipt)
-  })
-  it.each([
-    'no_open_receipt',
-    'cancellation_rejected',
-    'receipt_still_open',
-    'verification_required',
-    'cancellation_outcome_unknown',
-  ] as const)('preserves %s and the upstream HTTP status', async (status) => {
-    const payload = cancellationFixture(status)
-    const result = await invoke({
-      cancel: true,
-      payload,
-      upstreamStatus: payload.success ? 200 : 409,
-    })
-    expect(result.status()).toBe(payload.success ? 200 : 409)
-    expect(result.body()).toEqual(payload)
-    expect(result.upstream).toHaveBeenCalledTimes(1)
-  })
-  it('rejects command acknowledgement without verified closure', async () => {
-    const result = await invoke({
-      cancel: true,
-      payload: { ...cancellationFixture('cancelled_and_verified'), verification: openReceipt },
-    })
-    expect(result.status()).toBe(502)
-    expect(result.body()).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
   })
   it('retains safe gateway errors, codes and request_id while withholding internal data', async () => {
     const result = await invoke({
@@ -438,11 +368,11 @@ describe('G03 response and transport contract', () => {
     expect(result.status()).toBe(502)
     expect(result.body()).toMatchObject({ error: { upstreamStatus: 401 } })
   })
-  it('never retries a failed cancellation transport', async () => {
+  it('does not retry a failed receipt read', async () => {
     const upstream = vi
       .fn()
       .mockRejectedValue(new Error('private transport diagnostics ' + credential))
-    const result = await invoke({ cancel: true, upstream })
+    const result = await invoke({ upstream })
     expect(result.status()).toBe(502)
     expect(upstream).toHaveBeenCalledTimes(1)
     expect(JSON.stringify(result.body())).not.toContain(credential)
@@ -457,8 +387,8 @@ describe('G03 response and transport contract', () => {
           })
         }),
     )
-    const pending = invoke({ cancel: true, upstream: upstream as typeof fetch })
-    await vi.advanceTimersByTimeAsync(20_001)
+    const pending = invoke({ upstream: upstream as typeof fetch })
+    await vi.advanceTimersByTimeAsync(8_001)
     const result = await pending
     expect(result.status()).toBe(504)
     expect(upstream).toHaveBeenCalledTimes(1)

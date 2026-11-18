@@ -28,6 +28,18 @@ describe('same-origin dashboard API client safety boundary', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
   })
 
+  it('exposes no cancellation helper or device control transport', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetchSpy = vi.fn()
+    vi.stubGlobal('fetch', fetchSpy)
+    const client = await import('./client')
+    expect('cancelOpenReceipt' in client).toBe(false)
+    await expect(
+      client.getJson('/api/device/g03/cancel-receipt', z.object({ success: z.boolean() })),
+    ).rejects.toMatchObject({ kind: 'configuration' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('does not allow a production build to use mock mode or contact the API as a fallback', async () => {
     vi.stubEnv('PROD', true)
     vi.stubEnv('VITE_DATA_MODE', 'mock')
