@@ -5,6 +5,7 @@ import { z } from 'zod'
 import { apiMode, getJson } from '@/lib/api/client'
 import { toQueryString } from './queries'
 import { writebackOperationsPageSchema } from './operation-contracts'
+import { ApiReceiptReconciliation } from './ApiDocuments'
 import './api-operational-pages.css'
 
 export type OperationFamily = 'manual-review' | 'reconciliation' | 'events' | 'operations'
@@ -163,6 +164,7 @@ export function ApiOperationCollection({ family }: { family: OperationFamily }) 
           onSubmit={(event) => {
             event.preventDefault()
             setParams({
+              ...(family === 'reconciliation' ? { view: 'operations' } : {}),
               ...(supportsStatus && status.trim() ? { status: status.trim() } : {}),
               ...(supportsType && documentType.trim() ? { documentType: documentType.trim() } : {}),
               ...(supportsDates && from ? { from } : {}),
@@ -476,22 +478,42 @@ export function ApiWritebackOperations() {
   )
 }
 
-export function ApiOperationsHome() {
+export function ApiReconciliation() {
+  const [params] = useSearchParams()
+  const operations = params.get('view') === 'operations'
   return (
     <>
-      <div className="page-heading">
-        <div>
-          <span className="eyebrow">OPERATIONS CONTROL ROOM</span>
-          <h1>Monitoring</h1>
-          <p>Inspect durable evidence and the current scope of middleware observations.</p>
-        </div>
-      </div>
+      <nav className="api-source-note api-metric-links" aria-label="Reconciliation views">
+        <Link to="/reconciliation" aria-current={!operations ? 'page' : undefined}>
+          CU/KRA receipt comparison
+        </Link>
+        <Link to="/reconciliation?view=operations" aria-current={operations ? 'page' : undefined}>
+          Persisted reconciliation operations
+        </Link>
+      </nav>
+      {operations ? (
+        <ApiOperationCollection family="reconciliation" />
+      ) : (
+        <ApiReceiptReconciliation />
+      )}
+    </>
+  )
+}
+
+export function ApiOperationsHome({ children }: { children?: React.ReactNode }) {
+  return (
+    <>
+      {children}
       <div className="api-dashboard-grid">
         {Object.entries(descriptions).map(([path, info]) => (
           <section className="panel api-panel" key={path}>
             <div className="panel-body">
               <h2>
-                <Link to={`/${path}`}>{info.title}</Link>
+                <Link
+                  to={path === 'reconciliation' ? '/reconciliation?view=operations' : `/${path}`}
+                >
+                  {info.title}
+                </Link>
               </h2>
               <p>{info.description}</p>
               <p>{info.limitation}</p>

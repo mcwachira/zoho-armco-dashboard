@@ -4,26 +4,41 @@ import {
   documentDetailSchema,
 } from '../../src/features/api/document-contracts.js'
 import {
+  dashboardDeviceDiagnosticsSchema,
+  dashboardCreditNoteDetailSchema,
   dashboardCreditNotePageSchema,
   dashboardCreditNoteQueryParamsSchema,
   dashboardInvoicePageSchema,
+  dashboardInvoiceDetailSchema,
   dashboardInvoiceQueryParamsSchema,
   dashboardOverviewQueryParamsSchema,
   dashboardOverviewSchema,
   dashboardServiceHealthSchema,
 } from '../../src/features/api/schemas.js'
+import { writebackOperationsPageSchema } from '../../src/features/api/operation-contracts.js'
 
-// Existing reads plus four document mappings. Nested document projections are
-// explicitly provisional; authenticated gateway compatibility is unverified.
+// Canonical resource names supplied by the user. Preserve the existing gateway
+// namespace until the transferred route matrix resolves full external URLs.
+// Fresh unsigned probes: literal roots 404, /api/dashboard-prefixed reads 401.
+export const dashboardGatewayNamespace = '/api/dashboard'
+
+// Browser routes remain independently mapped by the fixed Vercel rewrites.
 export type DashboardGatewayPath =
-  | '/api/dashboard/overview'
-  | '/api/dashboard/invoices'
-  | '/api/dashboard/credit-notes'
-  | '/api/dashboard/services'
-  | '/api/dashboard/documents/invoices'
-  | '/api/dashboard/documents/credit-notes'
-  | '/api/dashboard/documents/invoices/{id}'
-  | '/api/dashboard/documents/credit-notes/{id}'
+  | '/overview'
+  | '/invoices'
+  | '/credit-notes'
+  | '/services'
+  | '/device'
+  | '/writebacks'
+  | '/reconciliation'
+  | '/events'
+  | '/operations'
+  | '/documents/invoices'
+  | '/documents/credit-notes'
+  | '/invoices/{id}'
+  | '/credit-notes/{id}'
+  | '/documents/invoices/{id}'
+  | '/documents/credit-notes/{id}'
 const text = z.string().trim().min(1).max(128)
 const timestamp = z.string().datetime({ offset: true })
 export const dashboardIdQuery = z
@@ -69,6 +84,7 @@ export interface DashboardReadRoute {
   query: z.ZodType
   response?: z.ZodType
   documentDetail?: boolean
+  requestDetail?: 'invoice' | 'credit_note'
   unavailable?: string
   unavailableCode?: string
 }
@@ -77,55 +93,71 @@ const unavailable = {
   unavailableCode: 'GATEWAY_ROUTE_UNAVAILABLE',
   unavailable: 'This resource is not enabled through the read-only dashboard gateway.',
 }
+const detailContractPending = {
+  unavailableCode: 'CONTRACT_ROUTE_UNAVAILABLE',
+  unavailable:
+    'The exact Public Gateway detail route and successful response require confirmation from the server audit reports. No upstream request was made.',
+}
 
 export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
   invoices: {
-    path: '/api/dashboard/invoices',
+    path: '/invoices',
     query: dashboardInvoiceQueryParamsSchema,
     response: dashboardInvoicePageSchema,
   },
   'credit-notes': {
-    path: '/api/dashboard/credit-notes',
+    path: '/credit-notes',
     query: dashboardCreditNoteQueryParamsSchema,
     response: dashboardCreditNotePageSchema,
   },
   invoice: {
+    path: '/invoices/{id}',
     query: dashboardIdQuery,
-    ...unavailable,
+    response: dashboardInvoiceDetailSchema,
+    requestDetail: 'invoice',
+    ...detailContractPending,
   },
   'credit-note': {
+    path: '/credit-notes/{id}',
     query: dashboardIdQuery,
-    ...unavailable,
+    response: dashboardCreditNoteDetailSchema,
+    requestDetail: 'credit_note',
+    ...detailContractPending,
   },
   requests: {
     // Existing UI alias; this adds no upstream route.
-    path: '/api/dashboard/invoices',
+    path: '/invoices',
     query: dashboardInvoiceQueryParamsSchema,
     response: dashboardInvoicePageSchema,
   },
   request: {
+    path: '/invoices/{id}',
     query: dashboardIdQuery,
-    ...unavailable,
+    response: dashboardInvoiceDetailSchema,
+    requestDetail: 'invoice',
+    ...detailContractPending,
   },
   overview: {
-    path: '/api/dashboard/overview',
+    path: '/overview',
     query: dashboardOverviewQueryParamsSchema,
     response: dashboardOverviewSchema,
   },
   services: {
-    path: '/api/dashboard/services',
+    path: '/services',
     query: noQuery,
     response: dashboardServiceHealthSchema,
   },
   device: {
+    path: '/device',
     query: noQuery,
-    ...unavailable,
+    response: dashboardDeviceDiagnosticsSchema,
   },
   capabilities: {
     query: noQuery,
     ...unavailable,
   },
   writebacks: {
+    path: '/writebacks',
     query: z
       .object({
         ...page,
@@ -136,7 +168,7 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
       })
       .strict()
       .superRefine(orderedDates),
-    ...unavailable,
+    response: writebackOperationsPageSchema,
   },
   'manual-review': {
     query: z
@@ -150,41 +182,43 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     ...unavailable,
   },
   reconciliation: {
+    path: '/reconciliation',
     query: listQuery,
-    ...unavailable,
   },
   events: {
+    path: '/events',
     query: z
       .object({ ...page, ...documentType, ...dates })
       .strict()
       .superRefine(orderedDates),
-    ...unavailable,
   },
   operations: {
+    path: '/operations',
     query: z.object({ ...page, ...documentType }).strict(),
-    ...unavailable,
   },
   'documents/invoices': {
-    path: '/api/dashboard/documents/invoices',
+    path: '/documents/invoices',
     query: documentQuery,
     response: documentPageSchema,
   },
   'documents/invoice': {
-    path: '/api/dashboard/documents/invoices/{id}',
+    path: '/documents/invoices/{id}',
     query: dashboardIdQuery,
     documentDetail: true,
     response: documentDetailSchema,
+    ...detailContractPending,
   },
   'documents/credit-notes': {
-    path: '/api/dashboard/documents/credit-notes',
+    path: '/documents/credit-notes',
     query: documentQuery,
     response: documentPageSchema,
   },
   'documents/credit-note': {
-    path: '/api/dashboard/documents/credit-notes/{id}',
+    path: '/documents/credit-notes/{id}',
     query: dashboardIdQuery,
     documentDetail: true,
     response: documentDetailSchema,
+    ...detailContractPending,
   },
   health: {
     query: z.object({ check: z.enum(['live', 'ready']) }).strict(),

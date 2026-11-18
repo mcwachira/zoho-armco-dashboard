@@ -21,4 +21,5 @@ jobs:
       - run: pnpm run lint
       - run: pnpm run format:check
       - run: pnpm test
+      - run: node --test scripts/probe-public-gateway.test.mjs
       - run: pnpm run build

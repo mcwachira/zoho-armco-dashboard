@@ -277,7 +277,9 @@ describe('read-only Vercel dashboard gateway', () => {
     )
     expect(res.status()).toBe(200)
     expect(fetch).toHaveBeenCalledOnce()
-    expect(fetch.mock.calls[0]?.[0].toString()).toBe(`http://127.0.0.1:3004${path}`)
+    expect(fetch.mock.calls[0]?.[0].toString()).toBe(
+      `http://127.0.0.1:3004/api/dashboard/${resource}${query ? `?${query}` : ''}`,
+    )
     expect(fetch.mock.calls[0]?.[1].method).toBe('GET')
     expect(res.body()).toEqual(payload)
   })

@@ -26,23 +26,23 @@ const cases = [
     resource: 'documents/invoices',
     query:
       'page=2&pageSize=200&search=fixture%20search&status=fixture-status&customerId=fixture-customer&dateFrom=2026-11-01T00%3A00%3A00Z&dateTo=2026-11-15T00%3A00%3A00Z&sortBy=date&sortOrder=D',
-    path: '/api/dashboard/documents/invoices',
+    path: '/documents/invoices',
   },
   {
     resource: 'documents/credit-notes',
     query:
       'page=2&pageSize=200&search=fixture%20search&status=fixture-status&customerId=fixture-customer&dateFrom=2026-11-01T00%3A00%3A00Z&dateTo=2026-11-15T00%3A00%3A00Z&sortBy=date&sortOrder=A',
-    path: '/api/dashboard/documents/credit-notes',
+    path: '/documents/credit-notes',
   },
   {
     resource: 'documents/invoice',
     query: 'id=fixture-invoice-42',
-    path: '/api/dashboard/documents/invoices/fixture-invoice-42',
+    path: '/documents/invoices/fixture-invoice-42',
   },
   {
     resource: 'documents/credit-note',
     query: 'id=fixture-credit-note-42',
-    path: '/api/dashboard/documents/credit-notes/fixture-credit-note-42',
+    path: '/documents/credit-notes/fixture-credit-note-42',
   },
 ]
 
@@ -79,19 +79,34 @@ function responseMock() {
 async function invoke(
   resource: string,
   query: string,
-  options: { method?: string; headers?: ApiRequest['headers'] } = {},
+  options: {
+    method?: string
+    headers?: ApiRequest['headers']
+    testPreparedDetailMapping?: boolean
+  } = {},
 ) {
   const module = await entryPoints[resource]!()
   const handler = module.default as (req: ApiRequest, res: ApiResponse) => Promise<unknown>
   const response = responseMock()
-  await handler(
-    {
-      method: options.method ?? 'GET',
-      url: `/api/dashboard/${resource}${query ? `?${query}` : ''}`,
-      headers: options.headers ?? { cookie: cookie() },
-    },
-    response.res,
-  )
+  const { dashboardReadRoutes } = await import('./dashboard-contracts')
+  const route = dashboardReadRoutes[resource]!
+  const unavailable = route.unavailable
+  // Existing synthetic detail-parser/security coverage exercises a prepared
+  // mapping only. The separate default-gate regression below verifies that
+  // production cannot forward it before exact route confirmation arrives.
+  if (route.documentDetail && options.testPreparedDetailMapping !== false) delete route.unavailable
+  try {
+    await handler(
+      {
+        method: options.method ?? 'GET',
+        url: `/api/dashboard/${resource}${query ? `?${query}` : ''}`,
+        headers: options.headers ?? { cookie: cookie() },
+      },
+      response.res,
+    )
+  } finally {
+    route.unavailable = unavailable
+  }
   return response
 }
 
@@ -117,6 +132,20 @@ afterEach(() => {
 })
 
 describe('confirmed document BFF transport with pending response DTOs', () => {
+  it.each(['documents/invoice', 'documents/credit-note'])(
+    'does not activate the unconfirmed exact detail template for %s',
+    async (resource) => {
+      const upstream = vi.fn()
+      vi.stubGlobal('fetch', upstream)
+      const response = await invoke(resource, 'id=fixture-document', {
+        testPreparedDetailMapping: false,
+      })
+      expect(response.status()).toBe(503)
+      expect(response.body()).toMatchObject({ error: { code: 'CONTRACT_ROUTE_UNAVAILABLE' } })
+      expect(upstream).not.toHaveBeenCalled()
+    },
+  )
+
   it.each(cases)(
     'protects $resource with the real session verifier',
     async ({ resource, query }) => {
@@ -177,7 +206,7 @@ describe('confirmed document BFF transport with pending response DTOs', () => {
           expect(upstream).toHaveBeenCalledOnce()
           const [target, init] = upstream.mock.calls[0]!
           expect(target.origin).toBe(origin)
-          expect(target.pathname).toBe(path)
+          expect(target.pathname).toBe('/api/dashboard' + path)
           expect(Object.fromEntries(target.searchParams)).toEqual(
             resource.endsWith('invoices') || resource.endsWith('credit-notes')
               ? Object.fromEntries(new URLSearchParams(query))

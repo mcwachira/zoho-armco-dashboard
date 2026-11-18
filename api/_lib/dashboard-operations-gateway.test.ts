@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
 import { handleDashboardRequest, type GatewayDependencies } from './dashboard-gateway'
-import { dashboardReadRoutes } from './dashboard-contracts'
-import { mockInvoices } from '../../src/features/api/mock-api-fixtures'
+import { dashboardGatewayNamespace, dashboardReadRoutes } from './dashboard-contracts'
+import {
+  mockInvoices,
+  mockInvoiceDetails,
+  mockCreditNoteDetails,
+  mockDeviceDiagnostics,
+} from '../../src/features/api/mock-api-fixtures'
 
 const token = 'fixture-only-dashboard-service-credential'
 const env = {
@@ -9,8 +14,10 @@ const env = {
   DASHBOARD_UPSTREAM_TOKEN: token,
 }
 
-async function invoke(path: string, payload: unknown = {}, method = 'GET') {
-  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)))
+async function invoke(path: string, payload: unknown = {}, method = 'GET', upstreamStatus = 200) {
+  const fetch = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify(payload), { status: upstreamStatus }))
   let body: unknown
   let status = 200
   const headers: Record<string, string | string[]> = {}
@@ -45,18 +52,28 @@ async function invoke(path: string, payload: unknown = {}, method = 'GET') {
 }
 
 describe('read-only gateway contract boundary', () => {
-  it('contains only the four existing reads and four authorized document mappings', () => {
+  it('preserves the established namespace while the transferred route matrix is pending', () => {
+    expect(dashboardGatewayNamespace).toBe('/api/dashboard')
+  })
+  it('contains only fixed Public Gateway roots and documented detail compatibility templates', () => {
     expect(
       [...new Set(Object.values(dashboardReadRoutes).flatMap((route) => route.path ?? []))].sort(),
     ).toEqual([
-      '/api/dashboard/credit-notes',
-      '/api/dashboard/documents/credit-notes',
-      '/api/dashboard/documents/credit-notes/{id}',
-      '/api/dashboard/documents/invoices',
-      '/api/dashboard/documents/invoices/{id}',
-      '/api/dashboard/invoices',
-      '/api/dashboard/overview',
-      '/api/dashboard/services',
+      '/credit-notes',
+      '/credit-notes/{id}',
+      '/device',
+      '/documents/credit-notes',
+      '/documents/credit-notes/{id}',
+      '/documents/invoices',
+      '/documents/invoices/{id}',
+      '/events',
+      '/invoices',
+      '/invoices/{id}',
+      '/operations',
+      '/overview',
+      '/reconciliation',
+      '/services',
+      '/writebacks',
     ])
   })
 
@@ -76,25 +93,132 @@ describe('read-only gateway contract boundary', () => {
     expect(result.headers['cache-control']).toBe('no-store')
   })
 
-  it.each([
-    'invoice?id=request-1',
-    'credit-note?id=request-1',
-    'request?id=request-1',
-    'device',
-    'capabilities',
-    'writebacks?page=101',
-    'manual-review',
-    'manual-review-case?id=case-1',
-    'reconciliation',
-    'events',
-    'operations',
-  ])(
+  it.each(['capabilities', 'manual-review', 'manual-review-case?id=case-1'])(
     'keeps the existing UI endpoint safely unavailable without forwarding %s',
     async (resource) => {
       const result = await invoke(`/api/dashboard/${resource}`)
       expect(result.status).toBe(503)
-      expect(result.body).toMatchObject({ error: { code: 'GATEWAY_ROUTE_UNAVAILABLE' } })
+      expect(result.body).toMatchObject({
+        error: {
+          code: 'GATEWAY_ROUTE_UNAVAILABLE',
+          message: `The dashboard has no confirmed Public Gateway contract for ${resource.split('?')[0]}. No upstream request was made.`,
+          upstreamStatus: undefined,
+        },
+      })
       expect(result.fetch).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['reconciliation', 'events', 'operations'])(
+    'identifies a confirmed %s route with a missing response schema accurately',
+    async (resource) => {
+      expect(dashboardReadRoutes[resource]?.path).toBe('/' + resource)
+      const result = await invoke('/api/dashboard/' + resource)
+      expect(result.status).toBe(503)
+      expect(result.body).toMatchObject({
+        error: { code: 'CONTRACT_SCHEMA_UNAVAILABLE' },
+      })
+      expect(result.fetch).not.toHaveBeenCalled()
+    },
+  )
+
+  it('reads persisted writebacks through the confirmed gateway root with validated filters', async () => {
+    const item = {
+      writebackId: 'writeback-1',
+      documentType: 'invoice',
+      documentId: 'zoho-1',
+      requestId: 'request-1',
+      status: 'failed',
+      errorCategory: 'provider_unavailable',
+      retryCount: 2,
+      providerExchangeCount: 3,
+      nextRetryAt: null,
+      createdAt: '2026-11-01T00:00:00.000Z',
+      updatedAt: '2026-11-02T00:00:00.000Z',
+      completedAt: null,
+    }
+    const payload = { page: 1, pageSize: 1, total: 1, items: [item] }
+    const result = await invoke(
+      '/api/dashboard/writebacks?page=1&pageSize=1&status=failed&documentType=invoice',
+      payload,
+    )
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual(payload)
+    expect(result.fetch.mock.calls[0]![0].toString()).toBe(
+      'https://gateway.example.test/api/dashboard/writebacks?page=1&pageSize=1&documentType=invoice&status=failed',
+    )
+    const unsafe = await invoke('/api/dashboard/writebacks?pageSize=1', {
+      ...payload,
+      items: [{ ...item, authorization: 'withheld-provider-credential' }],
+    })
+    expect(unsafe.status).toBe(502)
+    expect(JSON.stringify(unsafe.body)).not.toContain('withheld-provider-credential')
+  })
+
+  it('reads passive device diagnostics with the existing explicit validator', async () => {
+    const result = await invoke('/api/dashboard/device', mockDeviceDiagnostics)
+    expect(result.status).toBe(200)
+    expect(result.fetch.mock.calls[0]![0].pathname).toBe('/api/dashboard/device')
+    expect(result.body).toEqual(mockDeviceDiagnostics)
+    const incompatible = await invoke('/api/dashboard/device', { state: 'healthy' })
+    expect(incompatible.status).toBe(502)
+    expect(incompatible.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+  })
+
+  it.each([
+    ['invoice', Object.values(mockInvoiceDetails)[0]!, '/invoices/'],
+    ['request', Object.values(mockInvoiceDetails)[0]!, '/invoices/'],
+    ['credit-note', Object.values(mockCreditNoteDetails)[0]!, '/credit-notes/'],
+  ] as const)(
+    'keeps the prepared %s request template gated pending exact route confirmation',
+    async (resource, payload, base) => {
+      const blocked = await invoke(
+        `/api/dashboard/${resource}?id=${payload.request.requestId}`,
+        payload,
+      )
+      expect(blocked.status).toBe(503)
+      expect(blocked.body).toMatchObject({ error: { code: 'CONTRACT_ROUTE_UNAVAILABLE' } })
+      expect(blocked.fetch).not.toHaveBeenCalled()
+      // Validate identity enforcement for the prepared mapping using a test-only
+      // activation; this does not enable or verify the production gateway route.
+      const route = dashboardReadRoutes[resource]!
+      const unavailable = route.unavailable
+      delete route.unavailable
+      try {
+        const id = payload.request.requestId
+        const result = await invoke(`/api/dashboard/${resource}?id=${id}`, payload)
+        expect(result.status).toBe(200)
+        expect(result.fetch.mock.calls[0]![0].pathname).toBe('/api/dashboard' + base + id)
+        expect(result.fetch.mock.calls[0]![0].search).toBe('')
+        const wrong = await invoke(`/api/dashboard/${resource}?id=different-request`, payload)
+        expect(wrong.status).toBe(502)
+        expect(wrong.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+      } finally {
+        route.unavailable = unavailable
+      }
+    },
+  )
+
+  it.each([401, 403, 404, 503])(
+    'distinguishes an actual upstream HTTP %s failure from a local route restriction',
+    async (upstreamStatus) => {
+      const result = await invoke(
+        '/api/dashboard/invoices',
+        { error: { code: 'GATEWAY_ROUTE_UNAVAILABLE' } },
+        'GET',
+        upstreamStatus,
+      )
+      expect(result.fetch).toHaveBeenCalledOnce()
+      expect(result.status).toBe([401, 403].includes(upstreamStatus) ? 502 : upstreamStatus)
+      expect(result.body).toMatchObject({
+        error: {
+          code: 'GATEWAY_ROUTE_UNAVAILABLE',
+          upstreamStatus,
+          message: [401, 403].includes(upstreamStatus)
+            ? 'The middleware gateway rejected the dashboard service credential.'
+            : `The middleware gateway returned HTTP ${upstreamStatus}.`,
+        },
+      })
     },
   )
 

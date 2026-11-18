@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
@@ -10,6 +10,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+  vi.useRealTimers()
   vi.resetModules()
 })
 
@@ -29,12 +30,26 @@ async function showPage(
   vi.stubEnv('DEV', demo)
   vi.stubEnv('VITE_DATA_MODE', demo ? 'mock' : 'api')
   vi.stubGlobal('fetch', fetcher)
-  const { ApiWritebackOperations, ApiOperationCollection } = await import('./ApiOperations')
+  const { ApiWritebackOperations, ApiOperationCollection, ApiReconciliation } =
+    await import('./ApiOperations')
+  const ApiMonitoring =
+    route === '/monitoring' ? (await import('./ApiOperationalPages')).ApiMonitoring : null
+  const { ApiSystemHealth } = await import('./ApiSystemHealth')
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[route]}>
-        {family ? <ApiOperationCollection family={family} /> : <ApiWritebackOperations />}
+        {family ? (
+          <ApiOperationCollection family={family} />
+        ) : route === '/monitoring' && ApiMonitoring ? (
+          <ApiMonitoring range="7d" />
+        ) : route === '/health' ? (
+          <ApiSystemHealth />
+        ) : route.startsWith('/reconciliation') ? (
+          <ApiReconciliation />
+        ) : (
+          <ApiWritebackOperations />
+        )}
       </MemoryRouter>
     </QueryClientProvider>,
   )
@@ -55,6 +70,285 @@ const operation = {
   updatedAt: '2026-11-14T07:01:00Z',
   completedAt: null,
 }
+
+const services = {
+  availability: 'partial',
+  checkedAt: '2026-11-18T07:00:00Z',
+  gateway: { status: 'unknown', lastSuccessfulCommunicationAt: null },
+  middlewareApi: { status: 'reachable', processUptimeSeconds: 7230 },
+  database: { status: 'available' },
+  zfplabserverEndpoint: { status: 'unknown' },
+  g03Communication: { status: 'unknown' },
+  physicalDevice: { status: 'unverified' },
+  zohoBooks: { status: 'configured_unverified' },
+  etims: { status: 'not_configured' },
+  upstreamUptime: { status: 'unavailable', valueSeconds: null },
+  observability: {
+    source: 'in_process_observational_metrics',
+    counters: { 'http_requests.2xx': 42 },
+    jobs: {
+      stale_recovery: {
+        runs: 3,
+        failures: 1,
+        consecutiveFailures: 1,
+        lastStartedAt: '2026-11-18T06:55:00Z',
+        lastFinishedAt: '2026-11-18T06:55:01Z',
+        lastSuccessAt: null,
+        lastReconciledAt: null,
+        lastDurationMs: 1000,
+        running: false,
+        activeWork: 0,
+      },
+    },
+    httpDurationMs: { count: 4, sum: 60, buckets: { '100': 4, '+Inf': 4 } },
+  },
+}
+
+describe('limited service observations', () => {
+  it('loads validated service observations through its existing GET', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => response(services))
+    const client = await showPage(fetcher, '/health')
+    expect(await screen.findByText('15.0 ms')).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'System health', level: 1 })).toBeInTheDocument()
+    expect(screen.getByText(/Process uptime: 7230 seconds/)).toBeInTheDocument()
+    expect(screen.getByText('configured unverified')).toHaveClass('warn')
+    expect(screen.getByText('unverified')).toHaveClass('warn')
+    expect(screen.getByText('http requests.2xx').closest('tr')).toHaveTextContent('42')
+    expect(screen.getByText(/Idle.*recent failures/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Pending operations' })).toHaveAttribute(
+      'href',
+      '/operations',
+    )
+    expect(
+      fetcher.mock.calls.every(
+        ([url, init]) => String(url) === '/api/dashboard/services' && init?.method === 'GET',
+      ),
+    ).toBe(true)
+    client.clear()
+  })
+
+  it('shows missing monitoring metrics as unavailable instead of invented zero observations', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => response({ ...services, observability: null }))
+    const client = await showPage(fetcher, '/health')
+    expect(
+      await screen.findByText(/no in-process metrics snapshot was returned/),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('No observations')).not.toBeInTheDocument()
+    expect(screen.queryByText('HTTP duration observations')).not.toBeInTheDocument()
+    expect(screen.getByText(/Process uptime: 7230 seconds/)).toBeInTheDocument()
+    client.clear()
+  })
+
+  it('distinguishes returned empty metric sets from missing observations', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      response({
+        ...services,
+        observability: {
+          ...services.observability,
+          counters: {},
+          jobs: {},
+          httpDurationMs: { count: 0, sum: 0, buckets: {} },
+        },
+      }),
+    )
+    const client = await showPage(fetcher, '/health')
+    expect(await screen.findByText('No observations')).toBeInTheDocument()
+    const observations = screen.getByText('HTTP duration observations').parentElement
+    expect(observations).not.toBeNull()
+    expect(within(observations!).getByText('0')).toBeInTheDocument()
+    expect(screen.getByText(/No counters have been recorded/)).toBeInTheDocument()
+    expect(screen.getByText(/No worker observations returned/)).toBeInTheDocument()
+    client.clear()
+  })
+
+  it('retains validated metrics as stale after failed refresh and permits a successful recovery', async () => {
+    let fail = false
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      fail
+        ? response(
+            {
+              error: { code: 'UPSTREAM_UNAVAILABLE', message: 'Monitoring transport unavailable' },
+            },
+            503,
+          )
+        : response(services),
+    )
+    const client = await showPage(fetcher, '/health')
+    expect(await screen.findByText('15.0 ms')).toBeInTheDocument()
+    fail = true
+    const user = userEvent.setup()
+    await user.click(screen.getByRole('button', { name: 'Refresh telemetry' }))
+    expect(await screen.findByRole('alert', {}, { timeout: 5000 })).toHaveTextContent(
+      'Monitoring transport unavailable',
+    )
+    expect(screen.getByText(/all displayed health observations are stale/)).toBeInTheDocument()
+    expect(screen.getByText('15.0 ms')).toBeInTheDocument()
+    fail = false
+    await user.click(screen.getByRole('button', { name: 'Refresh telemetry' }))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+    expect(
+      screen.queryByText(/all displayed health observations are stale/),
+    ).not.toBeInTheDocument()
+    client.clear()
+  })
+
+  it('reports unavailable monitoring without fabricated health or zero metrics', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      response(
+        {
+          error: { code: 'UPSTREAM_UNAVAILABLE', message: 'Services read unavailable' },
+        },
+        503,
+      ),
+    )
+    const client = await showPage(fetcher, '/health')
+    expect(await screen.findByRole('alert', {}, { timeout: 5000 })).toHaveTextContent(
+      'Services read unavailable',
+    )
+    expect(screen.queryByText('No observations')).not.toBeInTheDocument()
+    expect(screen.queryByText('HTTP duration observations')).not.toBeInTheDocument()
+    expect(screen.queryByText('configured unverified')).not.toBeInTheDocument()
+    client.clear()
+  })
+
+  it('does not substitute demo monitoring or make live reads in mock mode', async () => {
+    const fetcher = vi.fn()
+    const client = await showPage(fetcher, '/health', undefined, true)
+    expect(screen.getByText(/No sample health results are substituted/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Refresh telemetry' })).toBeDisabled()
+    expect(fetcher).not.toHaveBeenCalled()
+    client.clear()
+  })
+})
+
+describe('overview-backed operational monitoring', () => {
+  async function showMonitoring(overviewResponse: (url: URL) => Response | Promise<Response>) {
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input), 'https://dashboard.test')
+      if (url.pathname === '/api/dashboard/overview') return overviewResponse(url)
+      if (url.pathname === '/api/dashboard/services') return response(services)
+      if (url.pathname === '/api/dashboard/manual-review')
+        return response({ availability: 'unavailable', reason: 'No review projection supplied.' })
+      return response({ page: 1, pageSize: 25, total: 0, items: [] })
+    })
+    return { client: await showPage(fetcher, '/monitoring'), fetcher }
+  }
+
+  it('reads overview aggregates using the selected range and retains scoped service links', async () => {
+    const { mockOverview } = await import('./mock-api-fixtures')
+    const { client, fetcher } = await showMonitoring((url) => {
+      const payload = mockOverview(
+        url.searchParams.get('createdFrom')!,
+        url.searchParams.get('createdTo')!,
+      )
+      if (payload.availability !== 'available') throw new Error('Expected synthetic overview.')
+      payload.metrics.invoices.totalRequests = 123
+      payload.metrics.creditNotes.totalRequests = 13
+      return response(payload)
+    })
+    const label = await screen.findByText('FISCALIZATION REQUESTS')
+    expect(within(label.closest('.stat-card')!).getByText('136')).toBeInTheDocument()
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
+    expect(screen.getByRole('heading', { name: 'Monitoring', level: 1 })).toBeInTheDocument()
+    const call = fetcher.mock.calls.find(([url]) =>
+      String(url).startsWith('/api/dashboard/overview?'),
+    )
+    expect(call).toBeDefined()
+    const url = new URL(String(call![0]), 'https://dashboard.test')
+    expect(
+      Date.parse(url.searchParams.get('createdTo')!) -
+        Date.parse(url.searchParams.get('createdFrom')!),
+    ).toBe(7 * 86_400_000)
+    expect(url.searchParams.has('from')).toBe(false)
+    expect(url.searchParams.has('to')).toBe(false)
+    expect(
+      fetcher.mock.calls.some(([url]) => String(url).startsWith('/api/dashboard/monitoring')),
+    ).toBe(false)
+    expect(screen.getByRole('link', { name: 'Reconciliation' })).toHaveAttribute(
+      'href',
+      '/reconciliation?view=operations',
+    )
+    expect(
+      screen.getAllByRole('link', { name: 'System health and telemetry' }).length,
+    ).toBeGreaterThan(0)
+    client.clear()
+  })
+
+  it('preserves overview unavailability instead of replacing it with service metrics', async () => {
+    const { client } = await showMonitoring(() =>
+      response({
+        availability: 'unavailable',
+        generatedAt: '2026-11-18T12:00:00Z',
+        reason: 'Aggregate projection unavailable.',
+      }),
+    )
+    expect(await screen.findByText('Aggregate projection unavailable.')).toBeInTheDocument()
+    expect(screen.queryByText('FISCALIZATION REQUESTS')).not.toBeInTheDocument()
+    expect(screen.queryByText('Mean HTTP duration')).not.toBeInTheDocument()
+    expect(screen.getByText('Current service diagnostics')).toBeInTheDocument()
+    client.clear()
+  })
+
+  it('surfaces an overview transport failure without inventing operational totals', async () => {
+    const { client } = await showMonitoring(() =>
+      response(
+        {
+          error: { code: 'UPSTREAM_UNAVAILABLE', message: 'Overview gateway unavailable' },
+        },
+        503,
+      ),
+    )
+    expect(
+      await screen.findByText(/Overview gateway unavailable/, {}, { timeout: 5000 }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText('FISCALIZATION REQUESTS')).not.toBeInTheDocument()
+    client.clear()
+  })
+})
+
+describe('reconciliation scopes', () => {
+  it('preserves the receipt comparison and exposes the operational endpoint as a separate view', async () => {
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      response(
+        {
+          error: {
+            code: 'CONTRACT_SCHEMA_UNAVAILABLE',
+            message: 'Reconciliation record schema unavailable.',
+          },
+        },
+        503,
+      ),
+    )
+    const client = await showPage(fetcher, '/reconciliation')
+    expect(screen.getByRole('heading', { name: 'CU/KRA Reconciliation' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'CU/KRA receipt comparison' })).toHaveAttribute(
+      'aria-current',
+      'page',
+    )
+    await userEvent
+      .setup()
+      .click(screen.getByRole('link', { name: 'Persisted reconciliation operations' }))
+    expect(await screen.findByRole('heading', { name: 'Reconciliation' })).toBeInTheDocument()
+    expect(await screen.findByRole('alert')).toHaveTextContent(
+      'Reconciliation record schema unavailable.',
+    )
+    expect(
+      fetcher.mock.calls.some(([input]) =>
+        String(input).startsWith('/api/dashboard/reconciliation?'),
+      ),
+    ).toBe(true)
+    await userEvent.setup().type(screen.getByLabelText('Reconciliation status'), 'pending')
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Apply filters' }))
+    expect(screen.getByRole('heading', { name: 'Reconciliation' })).toBeInTheDocument()
+    await waitFor(() =>
+      expect(fetcher.mock.calls.some(([input]) => String(input).includes('status=pending'))).toBe(
+        true,
+      ),
+    )
+    client.clear()
+  })
+})
 
 describe('operational collections', () => {
   it('renders independent writeback persistence fields and paginates server data', async () => {

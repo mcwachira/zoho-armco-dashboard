@@ -237,12 +237,36 @@ try {
     await evaluate(`document.body.innerText.includes('Sample documents are not substituted.')`),
   )
 
+  await evaluate(`document.querySelector('[aria-label="Collapse sidebar"]').click()`)
+  await ready(`document.querySelector('aside').classList.contains('collapsed')`, 'desktop collapse')
   await send('Emulation.setDeviceMetricsOverride', {
     width: 390,
     height: 844,
     deviceScaleFactor: 1,
     mobile: true,
   })
+  await evaluate(`document.querySelector('[aria-label="Open navigation"]').click()`)
+  await ready(
+    `document.querySelector('[aria-label="Open navigation"]').getAttribute('aria-expanded') === 'true'`,
+    'mobile menu after desktop collapse',
+  )
+  await ready(
+    `Math.abs(document.querySelector('aside').getBoundingClientRect().left) < 1`,
+    'expanded mobile sidebar settles onscreen',
+  )
+  record(
+    'Mobile menu expands a previously collapsed desktop sidebar',
+    await evaluate(
+      `!document.querySelector('aside').classList.contains('collapsed') && document.querySelector('aside').getBoundingClientRect().width > 200 && Math.abs(document.querySelector('aside').getBoundingClientRect().left) < 1`,
+    ),
+  )
+  await evaluate(`document.querySelector('aside a[href="/settings"]').click()`)
+  await ready(
+    `document.querySelector('h1')?.textContent.includes('Settings') && document.querySelector('[aria-label="Open navigation"]').getAttribute('aria-expanded') === 'false'`,
+    'mobile settings navigation',
+  )
+  record('Choosing Settings closes mobile navigation', true)
+  await layout('Mobile Settings has no page horizontal overflow')
   await navigate('/overview', 'Overview')
   await ready(
     `document.body.innerText.includes('FISCALIZATION REQUESTS')`,
@@ -258,6 +282,10 @@ try {
   await ready(
     `document.querySelector('[aria-label="Open navigation"]').getAttribute('aria-expanded') === 'true'`,
     'mobile menu open',
+  )
+  await ready(
+    `Math.abs(document.querySelector('aside').getBoundingClientRect().left) < 1`,
+    'mobile navigation animation settles onscreen',
   )
   record('Mobile navigation opens with accessible expanded state', true)
   await screenshot('mobile-navigation')
@@ -282,6 +310,10 @@ try {
     await evaluate(`document.activeElement?.getAttribute('aria-label') === 'Open navigation'`),
   )
   await evaluate(`document.querySelector('[aria-label="Open navigation"]').click()`)
+  await ready(
+    `Math.abs(document.querySelector('aside').getBoundingClientRect().left) < 1`,
+    'mobile navigation settles before request selection',
+  )
   await evaluate(
     `document.querySelector('nav[aria-label="Main navigation"] a[href="/requests"]').click()`,
   )
@@ -320,6 +352,34 @@ try {
     ),
   )
   await screenshot('mobile-invalid-request-date')
+  for (const [route, heading] of [
+    ['/overview', 'Overview'],
+    ['/invoices', 'Invoice register'],
+    ['/credit-notes', 'Credit-note register'],
+    ['/fiscalization', 'Fiscalization'],
+    ['/requests', 'Fiscalization requests'],
+    ['/device', 'G03 Device'],
+    ['/writeback', 'Writeback'],
+    ['/monitoring', 'Monitoring'],
+    ['/manual-review', 'Manual review'],
+    ['/reconciliation', 'CU/KRA Reconciliation'],
+    ['/events', 'Derived operational events'],
+    ['/operations', 'Pending operations'],
+    ['/health', 'System health'],
+    ['/settings', 'Settings'],
+  ]) {
+    await navigate(route, heading)
+    record(`Fixture route ${route} renders its expected heading`, true)
+    await layout(`Mobile fixture route ${route} contains page layout`)
+    const headingActions = await evaluate(
+      `Array.from(document.querySelectorAll('.page-heading .button')).filter(button => button.textContent.trim()).map(button => ({label:button.textContent.trim(),fontSize:parseFloat(getComputedStyle(button).fontSize),width:button.getBoundingClientRect().width}))`,
+    )
+    record(
+      `Mobile fixture route ${route} keeps heading action labels readable`,
+      headingActions.every((action) => action.fontSize > 0 && action.width > 20),
+      headingActions,
+    )
+  }
   record('No uncaught browser runtime exceptions', exceptions.length === 0, exceptions)
   record('Demo never called an API endpoint', apiRequests.length === 0, apiRequests)
 } catch (error) {
