@@ -1,5 +1,13 @@
 # ZohoAmarco Monitoring Dashboard
 
+Deployment packaging uses one static `api/dashboard.ts` function and exact
+`vercel.json` rewrites for the existing `/api/dashboard/*` URLs. Resource modules
+remain under `api/_dashboard/` as utilities; the older per-resource paths shown
+below describe logical API routes. Together with authentication and G03 functions,
+this packages six functions within the current Vercel Hobby limit. Application
+query validation and upstream permissions remain in the shared gateway. See the
+[current implementation report](docs/dashboard-implementation-report.md).
+
 The dashboard-data BFF retains overview, invoice history, credit-note history and
 services. Four additional document GET mappings now support invoice and credit-note
 registers/details using confirmed envelopes and isolated provisional nested bindings.

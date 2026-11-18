@@ -8,14 +8,106 @@
     "api/auth/**/*.ts": {
       "maxDuration": 20
     },
-    "api/dashboard/**/*.ts": {
-      "maxDuration": 10
-    },
     "api/device/**/*.ts": {
       "maxDuration": 30
+    },
+    "api/dashboard.ts": {
+      "maxDuration": 10
     }
   },
   "rewrites": [
+    {
+      "source": "/api/dashboard/capabilities",
+      "destination": "/api/dashboard?dashboardResource=capabilities"
+    },
+    {
+      "source": "/api/dashboard/credit-note",
+      "destination": "/api/dashboard?dashboardResource=credit-note"
+    },
+    {
+      "source": "/api/dashboard/credit-notes",
+      "destination": "/api/dashboard?dashboardResource=credit-notes"
+    },
+    {
+      "source": "/api/dashboard/device",
+      "destination": "/api/dashboard?dashboardResource=device"
+    },
+    {
+      "source": "/api/dashboard/events",
+      "destination": "/api/dashboard?dashboardResource=events"
+    },
+    {
+      "source": "/api/dashboard/health",
+      "destination": "/api/dashboard?dashboardResource=health"
+    },
+    {
+      "source": "/api/dashboard/invoice",
+      "destination": "/api/dashboard?dashboardResource=invoice"
+    },
+    {
+      "source": "/api/dashboard/invoices",
+      "destination": "/api/dashboard?dashboardResource=invoices"
+    },
+    {
+      "source": "/api/dashboard/manual-review-case",
+      "destination": "/api/dashboard?dashboardResource=manual-review-case"
+    },
+    {
+      "source": "/api/dashboard/manual-review",
+      "destination": "/api/dashboard?dashboardResource=manual-review"
+    },
+    {
+      "source": "/api/dashboard/operations",
+      "destination": "/api/dashboard?dashboardResource=operations"
+    },
+    {
+      "source": "/api/dashboard/overview",
+      "destination": "/api/dashboard?dashboardResource=overview"
+    },
+    {
+      "source": "/api/dashboard/reconciliation",
+      "destination": "/api/dashboard?dashboardResource=reconciliation"
+    },
+    {
+      "source": "/api/dashboard/request",
+      "destination": "/api/dashboard?dashboardResource=request"
+    },
+    {
+      "source": "/api/dashboard/requests",
+      "destination": "/api/dashboard?dashboardResource=requests"
+    },
+    {
+      "source": "/api/dashboard/services",
+      "destination": "/api/dashboard?dashboardResource=services"
+    },
+    {
+      "source": "/api/dashboard/telemetry",
+      "destination": "/api/dashboard?dashboardResource=telemetry"
+    },
+    {
+      "source": "/api/dashboard/writeback",
+      "destination": "/api/dashboard?dashboardResource=writeback"
+    },
+    {
+      "source": "/api/dashboard/writebacks",
+      "destination": "/api/dashboard?dashboardResource=writebacks"
+    },
+    {
+      "source": "/api/dashboard/documents/credit-note",
+      "destination": "/api/dashboard?dashboardResource=documents%2Fcredit-note"
+    },
+    {
+      "source": "/api/dashboard/documents/credit-notes",
+      "destination": "/api/dashboard?dashboardResource=documents%2Fcredit-notes"
+    },
+    {
+      "source": "/api/dashboard/documents/invoice",
+      "destination": "/api/dashboard?dashboardResource=documents%2Finvoice"
+    },
+    {
+      "source": "/api/dashboard/documents/invoices",
+      "destination": "/api/dashboard?dashboardResource=documents%2Finvoices"
+    },
     {
       "source": "/:path((?!api(?:/|$)).*)",
       "destination": "/index.html"
@@ -27,7 +119,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; upgrade-insecure-requests"
+          "value": "default-src \u0027self\u0027; base-uri \u0027self\u0027; object-src \u0027none\u0027; frame-ancestors \u0027none\u0027; form-action \u0027self\u0027; script-src \u0027self\u0027; style-src \u0027self\u0027 \u0027unsafe-inline\u0027; img-src \u0027self\u0027 data: blob:; font-src \u0027self\u0027 data:; connect-src \u0027self\u0027; upgrade-insecure-requests"
         },
         {
           "key": "Strict-Transport-Security",

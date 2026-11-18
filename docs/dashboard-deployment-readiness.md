@@ -131,3 +131,31 @@ are verified. No successful HTTP status may substitute for payload validation.
 
 The user expressly requires separate authorization before any GitHub push or
 deployment. Those actions were not performed.
+
+## Authorized deployment follow-up
+
+The user subsequently authorized pushing and testing production. The push passed
+all clean GitHub CI checks, but Vercel deployment
+`dpl_9eAgh4P6eUw3e1JAXkmX8PMmfBME` failed with
+`exceeded_serverless_functions_per_deployment` (Hobby maximum twelve).
+Vercel account login then confirmed project ID
+`prj_potkn87ChosvYHOwd2WvM4qzvEWz`, the expected repository and production
+branch `main`. Required server configuration names are present in Production;
+secret values were not printed or changed. Effective build Node is 22 despite
+the project's older Node 26 setting, because package engines override it.
+
+The packaging correction retains all public dashboard resource URLs using fixed
+rewrites into one static `api/dashboard.ts` function. Existing static mappings
+remain under `api/_dashboard/` as utility modules. Three auth functions and two
+device functions remain, for six functions total. The adapter consumes one
+allowlisted rewrite selector and leaves application queries strictly validated.
+There is no dynamic dashboard catch-all, so the original injected-parameter
+overview failure is not restored.
+
+Vercel documents underscore-prefixed utility exclusion in its
+[advanced function configuration](https://vercel.com/docs/functions/configuring-functions/advanced-configuration).
+The deployment-configuration test now verifies the six-function inventory and
+fixed resource rewrites in addition to API/SPA separation.
+
+The final deployment outcome is recorded in the implementation report. A failed
+attempt is not evidence that the new source reached the production alias.

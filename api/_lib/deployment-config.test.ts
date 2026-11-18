@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 
 const configuration = JSON.parse(
@@ -33,4 +33,28 @@ describe('production SPA fallback boundary', () => {
   ])('never returns SPA HTML for an API request to %s', (pathname) => {
     expect(matches(pathname)).toBe(false)
   })
+})
+
+it('packages at most twelve functions while retaining all fixed dashboard URLs', () => {
+  function functions(directory: URL): string[] {
+    return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+      if (entry.name.startsWith('_') || entry.name.startsWith('.')) return []
+      if (entry.isDirectory()) return functions(new URL(entry.name + '/', directory))
+      return entry.name.endsWith('.ts') ? [entry.name] : []
+    })
+  }
+  expect(functions(new URL('../', import.meta.url))).toHaveLength(6)
+  for (const resource of [
+    'overview',
+    'invoices',
+    'credit-notes',
+    'capabilities',
+    'documents/invoice',
+    'documents/credit-notes',
+  ]) {
+    expect(configuration.rewrites).toContainEqual({
+      source: `/api/dashboard/${resource}`,
+      destination: `/api/dashboard?dashboardResource=${encodeURIComponent(resource)}`,
+    })
+  }
 })

@@ -370,3 +370,14 @@ writeback or reconciliation actions.
 
 Complete check results, mission file inventory, production variables and release
 dependencies are in [the implementation report](dashboard-implementation-report.md).
+
+### Deployment packaging follow-up
+
+The authorized push passed clean GitHub CI but exposed Vercel's actual Hobby
+limit of twelve functions. Fixed public resource rewrites now share one static
+`api/dashboard.ts` entrypoint; resource utilities reside in `api/_dashboard/`.
+The full deployment inventory is six functions. Shared authentication, exact
+upstream routes, schema validation and unavailable responses remain unchanged.
+No bracketed dashboard route was reintroduced. The final packaging regression
+run passed 740 tests with 8 optional desktop skips, including selector injection,
+prototype-backed request headers and the existing overview date regressions.

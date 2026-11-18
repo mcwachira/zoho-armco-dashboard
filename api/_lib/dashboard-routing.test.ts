@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiRequest, ApiResponse } from './dashboard-gateway'
 import { mockOverview, mockServiceHealth } from '../../src/features/api/mock-api-fixtures'
@@ -82,8 +82,20 @@ function responseMock() {
 }
 
 async function entryPoint(resource: string) {
-  const module = await import(`../dashboard/${resource}.ts`)
-  return module.default as (req: ApiRequest, res: ApiResponse) => Promise<unknown>
+  const { default: handler } = await import('../dashboard')
+  const configuration = JSON.parse(
+    readFileSync(new URL('../../vercel.json', import.meta.url), 'utf8'),
+  )
+  const rewrite = configuration.rewrites.find(
+    (rule: { source: string }) => rule.source === `/api/dashboard/${resource}`,
+  )
+  if (!rewrite) throw new Error('Missing fixed dashboard rewrite.')
+  return (req: ApiRequest, res: ApiResponse) => {
+    const destination = new URL(rewrite.destination, 'https://dashboard.invalid')
+    const original = new URL(req.url ?? '/', 'https://dashboard.invalid')
+    for (const [key, value] of original.searchParams) destination.searchParams.append(key, value)
+    return handler({ ...req, url: destination.pathname + destination.search }, res)
+  }
 }
 
 beforeEach(() => {
@@ -106,25 +118,59 @@ afterEach(() => {
 })
 
 describe('Vercel dashboard filesystem routes', () => {
-  it('uses static entry points without dynamic route query injection', () => {
+  it('preserves prototype-backed Node request headers through consolidation', async () => {
+    const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify(mockServiceHealth)))
+    vi.stubGlobal('fetch', upstream)
+    const { default: handler } = await import('../dashboard')
+    const req = Object.assign(Object.create({ headers: { cookie: sessionCookie() } }), {
+      method: 'GET',
+      url: '/api/dashboard?dashboardResource=services',
+    }) as ApiRequest
+    const response = responseMock()
+    await handler(req, response.res)
+    expect(response.status()).toBe(200)
+    expect(upstream).toHaveBeenCalledOnce()
+  })
+
+  it('retains static resource mappings without dynamic route query injection', () => {
     // Plain Vercel Node routing adds bracketed filename segments to req.url's
     // query. [...path].ts produces ?...path=<resource>, not Next.js catch-all
-    // semantics. Static filenames must stay in place to avoid this regression.
-    const files = readdirSync(new URL('../dashboard/', import.meta.url))
+    // semantics. Fixed rewrites share a static function without bracketed names.
+    const files = readdirSync(new URL('../_dashboard/', import.meta.url))
       .filter((file) => file.endsWith('.ts'))
       .sort()
     expect(files).toEqual(resources.map((resource) => `${resource}.ts`).sort())
     for (const directory of ['documents']) {
       expect(
-        readdirSync(new URL(`../dashboard/${directory}/`, import.meta.url)).every(
+        readdirSync(new URL(`../_dashboard/${directory}/`, import.meta.url)).every(
           (file) => !file.includes('['),
         ),
       ).toBe(true)
     }
     for (const action of ['fiscalize', 'invoice-writeback', 'credit-note-writeback']) {
-      expect(existsSync(new URL(`../dashboard/actions/${action}.ts`, import.meta.url))).toBe(false)
+      expect(existsSync(new URL(`../_dashboard/actions/${action}.ts`, import.meta.url))).toBe(false)
     }
   })
+
+  it.each(['dashboardResource=services', 'dashboardResource=__proto__'])(
+    'rejects caller-injected routing selector %s',
+    async (query) => {
+      const upstream = vi.fn()
+      vi.stubGlobal('fetch', upstream)
+      const handler = await entryPoint('overview')
+      const response = responseMock()
+      await handler(
+        {
+          method: 'GET',
+          url: `/api/dashboard/overview?${encodedDates}&${query}`,
+          headers: { cookie: sessionCookie() },
+        },
+        response.res,
+      )
+      expect(response.status()).toBe(400)
+      expect(upstream).not.toHaveBeenCalled()
+    },
+  )
 
   describe.each([
     ['encoded', false],

@@ -289,3 +289,84 @@ Generated Edge profile data is excluded from ESLint/Prettier traversal; it is no
 application source or a pre-existing lint failure. No production secret or browser
 profile is included in the commit. Existing unrelated untracked middleware notes
 remain in the working tree.
+
+## Authorized push and hosted verification
+
+After local checks, the user authorized pushing the changes and testing through
+the production URL. Commits `e9f704a` (dashboard implementation) and `0b01c8d`
+(inventory-script whitespace cleanup) were pushed to `origin/main` successfully.
+Unrelated untracked middleware notes remain local and were not included.
+
+GitHub Actions run `44247752817` completed successfully on the pushed revision.
+Its Ubuntu clean install with `pnpm install --frozen-lockfile`, type check, lint,
+format check, automated tests and production build all passed. This extends the
+local frozen-lock-only validation with a successful clean CI installation.
+
+The connected Vercel deployment `dpl_9eAgh4P6eUw3e1JAXkmX8PMmfBME` failed:
+[deployment details](https://vercel.com/mcwachiras-projects/zoho-armco-dashboard/9eAgh4P6eUw3e1JAXkmX8PMmfBME).
+GitHub's status reports failure but does not include the build error. The Vercel
+CLI was obtained for log inspection; it requires account login because no saved
+Vercel credential or connected plugin is available. The exact deployment failure
+must be retrieved before a targeted correction can be made.
+
+Post-push production probes returned 200 HTML for `/` and `/overview`, 401 JSON
+for unsigned auth-session/overview/services reads, and platform 404 for
+`/api/dashboard/capabilities`. The served browser asset was still
+`index-DDhDKKM9.js`, whereas the new local production build emits
+`index-XueC5g4V.js`. Combined with the failed deployment status, these observations
+do not verify the pushed application on production.
+
+The repository is pushed and CI-verified. Deployment success and authenticated
+middleware integration remain incomplete; neither is presented as production
+readiness. Later browser retries after the mobile CSS correction encountered
+browser/CDP cold-start timeouts before assertions; the earlier 19-check browser
+run remains the completed fixture result, and the mobile correction has a passing
+36-test focused Requests run plus the final build/lint/format checks.
+
+### Confirmed deployment failure and packaging correction
+
+After the user completed Vercel CLI login, structured deployment metadata
+identified `exceeded_serverless_functions_per_deployment`: the Hobby project
+allows twelve functions. The successful frontend build was followed by failure
+while deploying outputs. Its function compiler also reported `Object.hasOwn`
+library errors, because its compilation did not inherit `tsconfig.node.json`.
+Those two calls now use `Object.prototype.hasOwnProperty.call` with identical
+own-property security semantics.
+
+The existing static resource modules were moved from `api/dashboard/` to
+`api/_dashboard/`, retaining their shared-handler imports and contract tests.
+Vercel excludes underscore-prefixed utility directories from function discovery.
+Each previous public resource URL now has a fixed, exact rewrite to the single
+static `api/dashboard.ts` entrypoint. Together with the three existing auth
+entrypoints and two G03 entrypoints, the deployment contains six functions.
+No public URL, upstream mapping, authorization rule or supported action changed.
+
+Only the explicit `dashboardResource` rewrite selector is consumed. It must occur
+once and name an existing route; duplicate or unknown selectors fail. Every
+application query parameter still reaches the existing strict validator,
+including arbitrary `path`/`...path`, unknown keys and duplicates. There is no
+bracketed dashboard route and no generic caller-selected upstream proxy. Node
+request header accessors are preserved explicitly rather than object-spread.
+Tests exercise the real consolidated handler and configured rewrites with signed
+sessions, exact ISO date windows, old injected parameters, selector injection,
+prototype-backed headers and the six-function inventory.
+
+Authenticated project metadata confirms project ID
+`prj_potkn87ChosvYHOwd2WvM4qzvEWz`, Vite, repository
+`zoho-armco-dashboard`, root directory unset (repository root), and production
+branch `main`. The project has Google client ID/secret, session secret, auth URL,
+allowed users, upstream URL/token and trusted user IDs in Production. Values were
+not printed. Project Node 26 is overridden by the repository engine; build logs
+confirm Node 22. No remote setting was changed.
+
+The read-only `scripts/verify-live-gateway.mjs` diagnostic reports only endpoint
+status and schema compatibility. An attempt using `vercel env run` stopped before
+any gateway request because Vercel will not export protected Production secret
+values. Those protections were preserved; no local secret file or fabricated
+production session was created.
+
+The final consolidation regression run passed **740 tests, 8 optional desktop
+skips** across 30 passed files and one skipped file. An earlier run during
+concurrent heavy build/check activity timed out in the first Requests test and
+affected the following test; the complete standalone rerun passed. Repository
+lint, formatting and TypeScript/Vite build were rerun for the packaging fix.

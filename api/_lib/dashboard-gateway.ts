@@ -159,7 +159,7 @@ export async function handleDashboardRequest(
   // Preserve the exact local resource name. Collapsing empty segments would
   // accept unsupported duplicate/trailing slash paths as an allowed resource.
   const resource = requestUrl.pathname.slice('/api/dashboard/'.length)
-  const definition = Object.hasOwn(dashboardReadRoutes, resource)
+  const definition = Object.prototype.hasOwnProperty.call(dashboardReadRoutes, resource)
     ? dashboardReadRoutes[resource]
     : undefined
   if (!definition) return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
@@ -482,7 +482,7 @@ export async function handleG03Request(
 
   const session = await dependencies.authorize(req, res)
   if (!session) return
-  const role = Object.hasOwn(middlewareRoles, session.role)
+  const role = Object.prototype.hasOwnProperty.call(middlewareRoles, session.role)
     ? middlewareRoles[session.role]
     : undefined
   if (!role || (cancel && role !== 'administrator'))

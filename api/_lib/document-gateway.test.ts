@@ -16,10 +16,10 @@ const entryPoints: Record<
   string,
   () => Promise<{ default: (req: ApiRequest, res: ApiResponse) => Promise<unknown> }>
 > = {
-  'documents/invoices': () => import('../dashboard/documents/invoices'),
-  'documents/credit-notes': () => import('../dashboard/documents/credit-notes'),
-  'documents/invoice': () => import('../dashboard/documents/invoice'),
-  'documents/credit-note': () => import('../dashboard/documents/credit-note'),
+  'documents/invoices': () => import('../_dashboard/documents/invoices'),
+  'documents/credit-notes': () => import('../_dashboard/documents/credit-notes'),
+  'documents/invoice': () => import('../_dashboard/documents/invoice'),
+  'documents/credit-note': () => import('../_dashboard/documents/credit-note'),
 }
 const cases = [
   {
