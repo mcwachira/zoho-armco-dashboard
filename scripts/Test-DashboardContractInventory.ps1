@@ -21,4 +21,3 @@ if ($missing.roots[0].exists) {throw 'Missing directory handling failed'}
 $bounded=& $inventory -SourceRoot $fixtureRoot -MaxEntries 1 | ConvertFrom-Json
 if (-not $bounded.roots[0].truncated) {throw 'Bounded traversal did not report truncation'}
 'PASS: inventory markers, exclusions, no source-body disclosure, read-only behavior, missing roots and bounded traversal.'
-
