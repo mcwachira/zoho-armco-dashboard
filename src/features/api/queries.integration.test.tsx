@@ -218,3 +218,54 @@ describe('dashboard API query hooks', () => {
     queryClient.clear()
   })
 })
+
+describe('Overview calendar input transport', () => {
+  it('normalizes both calendar bounds before fetching and parses the existing offset-aware response', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const { mockOverview } = await import('./mock-api-fixtures')
+    const { useDashboardOverviewQuery } = await import('./queries')
+    const from = '2026-11-01T00:00:00.000+03:00'
+    const to = '2026-11-18T23:59:59.999+03:00'
+    const payload = mockOverview(from, to)
+    const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)))
+    vi.stubGlobal('fetch', fetch)
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result, unmount } = renderHook(
+      () => useDashboardOverviewQuery({ createdFrom: '2026-11-01', createdTo: '2026-11-18' }),
+      { wrapper: createQueryWrapper(queryClient) },
+    )
+    try {
+      await waitFor(() => expect(result.current.isSuccess).toBe(true))
+      expect(fetch).toHaveBeenCalledWith(
+        '/api/dashboard/overview?createdFrom=2026-11-01T00%3A00%3A00.000%2B03%3A00&createdTo=2026-11-18T23%3A59%3A59.999%2B03%3A00',
+        expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+      )
+      expect(result.current.data).toEqual(payload)
+    } finally {
+      unmount()
+      queryClient.clear()
+    }
+  })
+
+  it('rejects a reversed calendar range before sending an API request', async () => {
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetch = vi.fn()
+    vi.stubGlobal('fetch', fetch)
+    const { useDashboardOverviewQuery } = await import('./queries')
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const { result, unmount } = renderHook(
+      () => useDashboardOverviewQuery({ createdFrom: '2026-11-19', createdTo: '2026-11-18' }),
+      { wrapper: createQueryWrapper(queryClient) },
+    )
+    try {
+      await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 })
+      expect(fetch).not.toHaveBeenCalled()
+      expect(result.current.data).toBeUndefined()
+    } finally {
+      unmount()
+      queryClient.clear()
+    }
+  })
+})

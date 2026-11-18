@@ -26,6 +26,7 @@ import { Link, useLocation } from 'react-router-dom'
 import type { GlobalDateRange } from '@/types/dashboard'
 import { useAuth } from '@/lib/auth/AuthProvider'
 import { ApiError } from '@/lib/api/client'
+import { refreshIntervalMs } from '@/lib/config'
 import {
   useDashboardCapabilitiesQuery,
   useDashboardCreditNoteDetailQuery,
@@ -48,6 +49,8 @@ import type {
   DashboardInvoiceStatus,
   DashboardCreditNoteItem,
   DashboardInvoiceItem,
+  DashboardInvoiceDetail,
+  DashboardCreditNoteDetail,
 } from './schemas'
 import { invoiceFiscalizationStatusSchema, creditNoteFiscalizationStateSchema } from './schemas'
 import { ApiOperationsHome, ApiWritebackOperations } from './ApiOperations'
@@ -63,10 +66,24 @@ const rangeDuration: Record<GlobalDateRange, number> = {
   '30d': 30 * 24 * 60 * 60 * 1000,
 }
 
-function dateRange(range: GlobalDateRange) {
-  const end = new Date()
+function dateRange(range: GlobalDateRange, anchor: number) {
+  const end = new Date(anchor)
   const start = new Date(end.getTime() - rangeDuration[range])
   return { createdFrom: start.toISOString(), createdTo: end.toISOString() }
+}
+
+function useRollingDateRange(range: GlobalDateRange) {
+  const [anchor, setAnchor] = useState(() => Date.now())
+  useEffect(() => {
+    const update = () => setAnchor(Date.now())
+    const interval = window.setInterval(update, refreshIntervalMs)
+    window.addEventListener('dashboard:refresh-range', update)
+    return () => {
+      window.clearInterval(interval)
+      window.removeEventListener('dashboard:refresh-range', update)
+    }
+  }, [])
+  return useMemo(() => dateRange(range, anchor), [range, anchor])
 }
 
 function useDebounced<T>(value: T, delay = 300) {
@@ -293,7 +310,7 @@ function formatDuration(seconds: number) {
 }
 
 export function ApiOverview({ range }: { range: GlobalDateRange }) {
-  const queryRange = useMemo(() => dateRange(range), [range])
+  const queryRange = useRollingDateRange(range)
   const query = useDashboardOverviewQuery(queryRange)
   const manualReview = useDashboardManualReviewQuery({ page: 1, pageSize: 100 })
   const recentInvoices = useDashboardInvoiceListQuery({ page: 1, pageSize: 25, ...queryRange })
@@ -388,6 +405,48 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
       ]
     : []
   const healthData = health.data
+  const healthPanel = (
+    <Panel
+      title="Current service diagnostics"
+      subtitle="A point-in-time read; it does not represent historical uptime"
+    >
+      <DataState
+        isLoading={health.isLoading}
+        isError={health.isError}
+        hasData={Boolean(health.data)}
+        error={health.error}
+        refetch={health.refetch}
+      />
+      {healthData && (
+        <div className="api-health-list">
+          <HealthRow
+            label="Middleware API"
+            value={healthData.middlewareApi.status}
+            detail={`Process uptime ${formatDuration(healthData.middlewareApi.processUptimeSeconds)} · checked ${new Date(healthData.checkedAt).toLocaleString()}`}
+          />
+          <HealthRow
+            label="Gateway"
+            value={healthData.gateway.status}
+            detail={
+              healthData.gateway.lastSuccessfulCommunicationAt
+                ? `Last successful communication ${new Date(healthData.gateway.lastSuccessfulCommunicationAt).toLocaleString()}`
+                : 'Last successful communication unavailable'
+            }
+          />
+          <HealthRow label="Database" value={healthData.database.status} />
+          <HealthRow label="ZFPLabServer endpoint" value={healthData.zfplabserverEndpoint.status} />
+          <HealthRow
+            label="G03 communication"
+            value={healthData.g03Communication.status}
+            detail="A version response is not proof of physical device health."
+          />
+          <HealthRow label="Zoho Books" value={healthData.zohoBooks.status} />
+          <HealthRow label="eTIMS" value={healthData.etims.status} />
+          <HealthRow label="Physical device" value={healthData.physicalDevice.status} />
+        </div>
+      )}
+    </Panel>
+  )
 
   return (
     <>
@@ -439,6 +498,7 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
         <Link to="/events">Derived operational events</Link>
         <Link to="/health">System health and telemetry</Link>
       </div>
+      {!available && healthPanel}
       {available && (
         <>
           <div className="api-source-note">
@@ -451,6 +511,20 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
             </span>
           </div>
           <div className="stat-grid api-stat-grid">
+            <Metric
+              label="FISCALIZED INVOICES"
+              value={available.metrics.invoices.confirmedReceiptCount}
+              foot="Invoice requests with persisted confirmed receipt evidence"
+              icon={FileCheck2}
+              links={[{ to: '/requests?kind=invoice', label: 'Invoice receipt evidence' }]}
+            />
+            <Metric
+              label="FISCALIZED CREDIT NOTES"
+              value={available.metrics.creditNotes.confirmedReceiptCount}
+              foot="Credit-note requests with persisted confirmed receipt evidence"
+              icon={FileCheck2}
+              links={[{ to: '/requests?kind=credit_note', label: 'Credit-note receipt evidence' }]}
+            />
             <Metric
               label="FISCALIZATION REQUESTS"
               value={allRequests ?? '—'}
@@ -629,49 +703,7 @@ export function ApiOverview({ range }: { range: GlobalDateRange }) {
                   : 'Historical time-series, transaction value, processing duration, historical uptime, queue depth, event-count and total manual-review aggregates are unavailable. Derived event records have their own view.'}
               </p>
             </Panel>
-            <Panel
-              title="Current service diagnostics"
-              subtitle="A point-in-time read; it does not represent historical uptime"
-            >
-              <DataState
-                isLoading={health.isLoading}
-                isError={health.isError}
-                hasData={Boolean(health.data)}
-                error={health.error}
-                refetch={health.refetch}
-              />
-              {healthData && (
-                <div className="api-health-list">
-                  <HealthRow
-                    label="Middleware API"
-                    value={healthData.middlewareApi.status}
-                    detail={`Process uptime ${formatDuration(healthData.middlewareApi.processUptimeSeconds)} · checked ${new Date(healthData.checkedAt).toLocaleString()}`}
-                  />
-                  <HealthRow
-                    label="Gateway"
-                    value={healthData.gateway.status}
-                    detail={
-                      healthData.gateway.lastSuccessfulCommunicationAt
-                        ? `Last successful communication ${new Date(healthData.gateway.lastSuccessfulCommunicationAt).toLocaleString()}`
-                        : 'Last successful communication unavailable'
-                    }
-                  />
-                  <HealthRow label="Database" value={healthData.database.status} />
-                  <HealthRow
-                    label="ZFPLabServer endpoint"
-                    value={healthData.zfplabserverEndpoint.status}
-                  />
-                  <HealthRow
-                    label="G03 communication"
-                    value={healthData.g03Communication.status}
-                    detail="A version response is not proof of physical device health."
-                  />
-                  <HealthRow label="Zoho Books" value={healthData.zohoBooks.status} />
-                  <HealthRow label="eTIMS" value={healthData.etims.status} />
-                  <HealthRow label="Physical device" value={healthData.physicalDevice.status} />
-                </div>
-              )}
-            </Panel>
+            {healthPanel}
           </div>
         </>
       )}
@@ -782,7 +814,7 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
     attempts: true,
     updated: true,
   })
-  const windowRange = useMemo(() => dateRange(range), [range])
+  const windowRange = useRollingDateRange(range)
   useEffect(
     () => setPage(1),
     [kind, debouncedSearch, status, transmission, reconciliation, writeback, range, pageSize],
@@ -1188,15 +1220,13 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
                             <td>{new Date(row.updatedAt).toLocaleString()}</td>
                           )}
                           <td>
-                            {row.documentType === 'invoice' && (
-                              <Link
-                                to={`/requests?id=${encodeURIComponent(row.requestId)}`}
-                                onClick={(event) => event.stopPropagation()}
-                                aria-label={`Open execution request ${row.requestId}`}
-                              >
-                                Execution
-                              </Link>
-                            )}
+                            <Link
+                              to={`/requests?kind=${row.documentType}&id=${encodeURIComponent(row.requestId)}`}
+                              onClick={(event) => event.stopPropagation()}
+                              aria-label={`Open execution request ${row.requestId}`}
+                            >
+                              Execution
+                            </Link>
                             <button
                               className="icon-button"
                               aria-label={`Open ${row.documentNumber ?? row.requestId}`}
@@ -1482,6 +1512,7 @@ export function RecordDrawer({
                   value={request.transmissionStatus ?? 'Unavailable'}
                 />
               </DetailSection>
+              <ProcessingDiagnostics request={request} />
               {selected.kind === 'invoice' ? (
                 <InvoiceDetail request={request as NonNullable<typeof invoice.data>['request']} />
               ) : (
@@ -1566,6 +1597,84 @@ export function RecordDrawer({
         </div>
       </motion.aside>
     </motion.div>
+  )
+}
+
+function ProcessingDiagnostics({
+  request,
+}: {
+  request: DashboardInvoiceDetail['request'] | DashboardCreditNoteDetail['request']
+}) {
+  const failedAttempt = [...request.attempts]
+    .sort((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
+    .find((attempt) =>
+      'errorCode' in attempt
+        ? Boolean(attempt.errorCode || attempt.errorMessage)
+        : Boolean(attempt.errorCategory || attempt.errorDetails),
+    )
+  const errorCode = failedAttempt
+    ? 'errorCode' in failedAttempt
+      ? failedAttempt.errorCode
+      : failedAttempt.errorCategory
+    : request.lastError?.code
+  const errorMessage = failedAttempt
+    ? 'errorMessage' in failedAttempt
+      ? failedAttempt.errorMessage
+      : failedAttempt.errorDetails
+    : request.lastError?.message
+  const outcome = failedAttempt
+    ? 'outcome' in failedAttempt
+      ? failedAttempt.outcome
+      : failedAttempt.status
+    : null
+  const confirmedReceipt = request.confirmedReceiptEvidence && request.evidence !== null
+
+  return (
+    <section className="api-detail-section" aria-label="Processing diagnostics">
+      <h3>Processing diagnostics</h3>
+      <DetailLine
+        label="Affected document"
+        value={request.documentNumber ?? request.zohoDocumentId}
+      />
+      <DetailLine label="Fiscalization request" value={request.requestId} />
+      <DetailLine label="Recorded processing state" value={request.fiscalizationStatus} />
+      <DetailLine
+        label="Latest stage with recorded error"
+        value={failedAttempt?.stage ?? 'Not reported'}
+      />
+      <DetailLine label="Recorded attempt outcome" value={outcome ?? 'Not reported'} />
+      <DetailLine label="Error code / category" value={errorCode ?? 'None reported'} />
+      <DetailLine label="Error message" value={errorMessage ?? 'None reported'} />
+      <DetailLine
+        label="Device contact"
+        value={
+          confirmedReceipt
+            ? 'Confirmed by persisted receipt evidence'
+            : 'Not established by this API response; an attempt alone does not prove contact'
+        }
+      />
+      <DetailLine
+        label="Fiscal receipt outcome"
+        value={
+          confirmedReceipt
+            ? 'Confirmed fiscal receipt evidence persisted'
+            : 'No confirmed fiscal receipt evidence; device outcome is not established here'
+        }
+      />
+      <DetailLine
+        label="Zoho writeback state"
+        value={request.writeback?.status ?? request.writebackStatus}
+      />
+      <DetailLine
+        label="Zoho writeback error"
+        value={request.writeback?.errorCategory ?? 'None reported'}
+      />
+      <p className="api-note">
+        Processing states, unknown fiscalization outcomes and writeback failures do not establish
+        whether the G03 currently has an open receipt. Use the current receipt observation on the
+        Device page.
+      </p>
+    </section>
   )
 }
 
@@ -1982,16 +2091,18 @@ function Timeline({
   )
 }
 
-export function ApiDevice() {
+export function ApiDevice({ embedded = false }: { embedded?: boolean } = {}) {
   const device = useDashboardDeviceDiagnosticsQuery()
   const services = useDashboardServiceHealthQuery()
   return (
     <>
-      <Heading
-        eyebrow="Infrastructure"
-        title="G03 Device"
-        description="Read-only endpoint diagnostics with device health and fiscal readiness kept explicitly separate."
-      />
+      {!embedded && (
+        <Heading
+          eyebrow="Infrastructure"
+          title="G03 Device"
+          description="Read-only endpoint diagnostics with device health and fiscal readiness kept explicitly separate."
+        />
+      )}
       <div className="api-source-note">
         <ShieldAlert size={15} /> Network reachability is not physical device health, KRA/eTIMS
         pairing, or fiscalization readiness.
@@ -2094,7 +2205,7 @@ function LegacyApiWriteback({ range }: { range: GlobalDateRange }) {
   const [page, setPage] = useState(1)
   const [selected, setSelected] = useState<SelectedRecord | null>(null)
   const searchValue = useDebounced(search.trim())
-  const windowRange = useMemo(() => dateRange(range), [range])
+  const windowRange = useRollingDateRange(range)
   useEffect(() => setPage(1), [searchValue, status, kind, range])
   // A merged cross-type page needs a shared backend ordering contract. Until
   // that exists, the all-types view shows the first authorized page from each source;

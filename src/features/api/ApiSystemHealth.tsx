@@ -1,7 +1,6 @@
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
-import { apiMode, getJson } from '@/lib/api/client'
-import { dashboardServiceHealthSchema } from './schemas'
+import { apiMode } from '@/lib/api/client'
+import { useDashboardServiceHealthQuery } from './queries'
 import './api-operational-pages.css'
 import './system-health.css'
 
@@ -30,13 +29,7 @@ function Dependency({ title, status, detail }: { title: string; status: string; 
 }
 
 export function ApiSystemHealth() {
-  const telemetry = useQuery({
-    queryKey: ['middleware', 'system-health-services'],
-    queryFn: ({ signal }) =>
-      getJson('/api/dashboard/services', dashboardServiceHealthSchema, signal),
-    enabled: apiMode === 'api',
-    retry: false,
-  })
+  const telemetry = useDashboardServiceHealthQuery(apiMode === 'api')
   const services = telemetry.data
   const data = services?.observability
   return (
@@ -64,6 +57,16 @@ export function ApiSystemHealth() {
           ? 'Live health and telemetry are unavailable in demo mode. No sample health results are substituted.'
           : 'Checks report their own scope. Configuration, liveness and historical counters do not establish device or integration health.'}
       </div>
+      {services && (
+        <div className="api-source-note" role="status">
+          Middleware observations checked {timestamp(services.checkedAt)}.
+          {telemetry.isError
+            ? ' Refresh failed; all displayed health observations are stale.'
+            : telemetry.isFetching
+              ? ' Refresh in progress; showing the last successful observations.'
+              : ' These are the last successful observations, not continuous connectivity checks.'}
+        </div>
+      )}
       <div className="api-dashboard-grid">
         {services && (
           <>
@@ -122,7 +125,7 @@ export function ApiSystemHealth() {
             <p role="alert">
               Telemetry unavailable:{' '}
               {telemetry.error instanceof Error ? telemetry.error.message : 'No verified response.'}
-              {data ? ' Showing the last successful response; these values are stale.' : ''}
+              {services ? ' Showing the last successful response; these values are stale.' : ''}
             </p>
           )}
           {telemetry.dataUpdatedAt > 0 && (

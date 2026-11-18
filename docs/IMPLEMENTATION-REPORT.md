@@ -1,5 +1,10 @@
 # Dashboard implementation report
 
+Historical operational implementation report. Its broader forwarding/action
+mapping is superseded by the [secure read-only BFF report](SECURE-BFF-REPORT.md).
+Only four distinct gateway GET paths are now forwarded; action handlers have been
+removed. Do not use the historical test counts below as current verification.
+
 Reviewed and implemented locally on 2026-11-15. **The full definition of done is
 not met.** Existing request, writeback and health capabilities were integrated
 and tested; missing JSON DTOs and middleware operator-session integration prevent

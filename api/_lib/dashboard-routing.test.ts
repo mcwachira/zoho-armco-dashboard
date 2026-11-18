@@ -1,5 +1,5 @@
 import { createHmac } from 'node:crypto'
-import { readdirSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiRequest, ApiResponse } from './dashboard-gateway'
 import { mockOverview, mockServiceHealth } from '../../src/features/api/mock-api-fixtures'
@@ -114,12 +114,15 @@ describe('Vercel dashboard filesystem routes', () => {
       .filter((file) => file.endsWith('.ts'))
       .sort()
     expect(files).toEqual(resources.map((resource) => `${resource}.ts`).sort())
-    for (const directory of ['actions', 'documents']) {
+    for (const directory of ['documents']) {
       expect(
         readdirSync(new URL(`../dashboard/${directory}/`, import.meta.url)).every(
           (file) => !file.includes('['),
         ),
       ).toBe(true)
+    }
+    for (const action of ['fiscalize', 'invoice-writeback', 'credit-note-writeback']) {
+      expect(existsSync(new URL(`../dashboard/actions/${action}.ts`, import.meta.url))).toBe(false)
     }
   })
 
@@ -222,6 +225,109 @@ describe('Vercel dashboard filesystem routes', () => {
       response.res,
     )
     expect(response.status()).toBe(400)
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
+  it.each(['...path', 'path'])(
+    'reproduces the historical overview failure when routing injects %s into valid dates',
+    async (routingKey) => {
+      const upstream = vi.fn()
+      vi.stubGlobal('fetch', upstream)
+      const handler = await entryPoint('overview')
+      const response = responseMock()
+      await handler(
+        {
+          method: 'GET',
+          url: `/api/dashboard/overview?${encodedDates}&${routingKey}=overview`,
+          headers: { cookie: sessionCookie() },
+        },
+        response.res,
+      )
+      // These exact dates succeed above through the static entrypoint. The
+      // former dynamic route's extra key, not ISO fractional seconds, is invalid.
+      // Do not repair routing by silently accepting arbitrary query parameters.
+      expect(response.status()).toBe(400)
+      expect(response.body()).toMatchObject({ error: { code: 'INVALID_QUERY' } })
+      expect(upstream).not.toHaveBeenCalled()
+    },
+  )
+})
+
+describe('Overview offset-aware wire contract', () => {
+  it.each([
+    ['2026-01-02T00:00:00.000Z', 200],
+    ['2026-01-02T00:00:00.001Z', 400],
+  ] as const)(
+    'bounds the actual overview handler range ending %s to 366 days',
+    async (to, status) => {
+      const from = '2025-01-01T00:00:00.000Z'
+      const payload = mockOverview(from, to)
+      const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)))
+      vi.stubGlobal('fetch', upstream)
+      const handler = await entryPoint('overview')
+      const response = responseMock()
+      const query = new URLSearchParams({ createdFrom: from, createdTo: to })
+      await handler(
+        {
+          method: 'GET',
+          url: '/api/dashboard/overview?' + query,
+          headers: { cookie: sessionCookie() },
+        },
+        response.res,
+      )
+      expect(response.status()).toBe(status)
+      if (status === 200) {
+        expect(response.body()).toEqual(payload)
+        expect(upstream).toHaveBeenCalledOnce()
+      } else {
+        expect(response.body()).toMatchObject({ error: { code: 'INVALID_QUERY' } })
+        expect(upstream).not.toHaveBeenCalled()
+      }
+    },
+  )
+
+  it('preserves encoded Nairobi calendar boundaries through the existing authenticated gateway', async () => {
+    const from = '2026-11-01T00:00:00.000+03:00'
+    const to = '2026-11-18T23:59:59.999+03:00'
+    const payload = mockOverview(from, to)
+    const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload)))
+    vi.stubGlobal('fetch', upstream)
+    const handler = await entryPoint('overview')
+    const response = responseMock()
+    const query = new URLSearchParams({ createdFrom: from, createdTo: to })
+    await handler(
+      {
+        method: 'GET',
+        url: '/api/dashboard/overview?' + query,
+        headers: { cookie: sessionCookie() },
+      },
+      response.res,
+    )
+    expect(response.status()).toBe(200)
+    expect(response.body()).toEqual(payload)
+    const [target, options] = upstream.mock.calls[0]!
+    expect(target.searchParams.get('createdFrom')).toBe(from)
+    expect(target.searchParams.get('createdTo')).toBe(to)
+    expect(target.search).toContain('%2B03%3A00')
+    expect(options.method).toBe('GET')
+    expect(options.headers.Authorization).toBe('Bearer ' + serviceCredential)
+  })
+
+  it('keeps date-only values invalid at the server wire boundary', async () => {
+    const upstream = vi.fn()
+    vi.stubGlobal('fetch', upstream)
+    const handler = await entryPoint('overview')
+    const response = responseMock()
+    await handler(
+      {
+        method: 'GET',
+        url: '/api/dashboard/overview?createdFrom=2026-11-01&createdTo=2026-11-18',
+        headers: { cookie: sessionCookie() },
+      },
+      response.res,
+    )
+    expect(response.status()).toBe(400)
+    expect(response.body()).toMatchObject({ error: { code: 'INVALID_QUERY' } })
     expect(upstream).not.toHaveBeenCalled()
   })
 })

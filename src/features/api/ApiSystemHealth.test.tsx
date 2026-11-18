@@ -84,7 +84,9 @@ describe('middleware health and telemetry', () => {
       response({ error: { code: 'UPSTREAM_UNAVAILABLE', message: 'Middleware unavailable' } }, 503),
     )
     const client = await showPage(fetcher)
-    expect(await screen.findByText(/Telemetry unavailable:/)).toBeInTheDocument()
+    expect(
+      await screen.findByText(/Telemetry unavailable:/, {}, { timeout: 5000 }),
+    ).toBeInTheDocument()
     expect(screen.queryByText('Mean HTTP duration')).not.toBeInTheDocument()
     expect(screen.queryByText('No observations')).not.toBeInTheDocument()
     expect(screen.queryByText('available')).not.toBeInTheDocument()
@@ -148,6 +150,32 @@ describe('middleware health and telemetry', () => {
     expect(screen.getByText(/No sample health results are substituted/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Refresh telemetry' })).toBeDisabled()
     expect(fetcher).not.toHaveBeenCalled()
+    client.clear()
+  })
+
+  it('marks cached dependency observations stale after a failed refresh even without telemetry', async () => {
+    let fail = false
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      fail
+        ? response(
+            { error: { code: 'UPSTREAM_UNAVAILABLE', message: 'Middleware unavailable' } },
+            503,
+          )
+        : response({ ...services, observability: null }),
+    )
+    const client = await showPage(fetcher)
+    expect(
+      await screen.findByText(/no in-process metrics snapshot was returned/),
+    ).toBeInTheDocument()
+    fail = true
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Refresh telemetry' }))
+    expect(
+      await screen.findByText(/all displayed health observations are stale/, {}, { timeout: 5000 }),
+    ).toBeInTheDocument()
+    expect(screen.getByText('configured unverified')).toBeInTheDocument()
+    expect(
+      screen.getByText(/Showing the last successful response; these values are stale/),
+    ).toBeInTheDocument()
     client.clear()
   })
 })

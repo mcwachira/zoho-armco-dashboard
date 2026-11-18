@@ -7,6 +7,7 @@
   useState,
   type ReactNode,
 } from 'react'
+import { flushSync } from 'react-dom'
 import {
   Link,
   Navigate,
@@ -77,7 +78,6 @@ import { NotificationCenter } from '@/components/layout/NotificationCenter'
 import { DemoDataProvider, useDemoData, type DemoData } from '@/mocks/demo-data-context'
 import type { GlobalDateRange } from '@/types/dashboard'
 import {
-  ApiDevice,
   ApiFiscalization,
   ApiMonitoring,
   ApiOverview,
@@ -86,7 +86,8 @@ import {
 } from '@/features/api/ApiOperationalPages'
 import { ApiRequests } from '@/features/api/ApiRequests'
 import { ApiSystemHealth } from '@/features/api/ApiSystemHealth'
-import { ApiDocuments } from '@/features/api/ApiDocuments'
+import { ApiDocuments, ApiReceiptReconciliation } from '@/features/api/ApiDocuments'
+import { G03Device, G03PreflightWarning } from '@/features/api/G03Device'
 import { ApiOperationCollection } from '@/features/api/ApiOperations'
 
 const nav: { label: string; path: string; icon: LucideIcon }[] = [
@@ -99,7 +100,7 @@ const nav: { label: string; path: string; icon: LucideIcon }[] = [
   { label: 'Writeback', path: '/writeback', icon: RefreshCw },
   { label: 'Monitoring', path: '/monitoring', icon: Activity },
   { label: 'Manual review', path: '/manual-review', icon: ShieldCheck },
-  { label: 'Reconciliation', path: '/reconciliation', icon: ListFilter },
+  { label: 'CU/KRA Reconciliation', path: '/reconciliation', icon: ListFilter },
   { label: 'System events', path: '/events', icon: Activity },
   { label: 'Pending operations', path: '/operations', icon: Clock3 },
   { label: 'System health', path: '/health', icon: Activity },
@@ -229,8 +230,42 @@ function Shell() {
   const [mobileNav, setMobileNav] = useState(false)
   const [userOpen, setUserOpen] = useState(false)
   const [loggingOut, setLoggingOut] = useState(false)
-  const [refreshed, setRefreshed] = useState(new Date())
+  const [refreshed, setRefreshed] = useState<Date | null>(null)
+  const [refreshing, setRefreshing] = useState(false)
   const [globalRange, setGlobalRange] = useState<GlobalDateRange>('24h')
+  const navigationRef = useRef<HTMLElement>(null)
+  const mobileMenuRef = useRef<HTMLButtonElement>(null)
+  useEffect(() => {
+    if (!mobileNav) return
+    const navigation = navigationRef.current
+    const focusable = () =>
+      Array.from(
+        navigation?.querySelectorAll<HTMLElement>('a[href], button:not([disabled])') ?? [],
+      ).filter((element) => window.getComputedStyle(element).display !== 'none')
+    focusable()[0]?.focus()
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault()
+        setMobileNav(false)
+      }
+      if (event.key !== 'Tab') return
+      const elements = focusable()
+      const first = elements[0]
+      const last = elements.at(-1)
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault()
+        last?.focus()
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault()
+        first?.focus()
+      }
+    }
+    document.addEventListener('keydown', keydown)
+    return () => {
+      document.removeEventListener('keydown', keydown)
+      mobileMenuRef.current?.focus()
+    }
+  }, [mobileNav])
   const avatarLabel =
     auth.user?.name
       .split(/\s+/)
@@ -252,28 +287,47 @@ function Shell() {
       setLoggingOut(false)
     }
   }
-  const refresh = () => {
+  const refresh = async () => {
+    if (refreshing) return
     if (apiMode === 'mock') {
       toast.info('Demo snapshot is local and static; no live API request was made.')
       return
     }
-    void queryClient.invalidateQueries({ refetchType: 'active' }).then(() => {
+    const activeReads = queryClient
+      .getQueryCache()
+      .findAll({ queryKey: ['middleware'], type: 'active' })
+    if (!activeReads.length) {
+      toast.info('No active middleware reads to refresh.')
+      return
+    }
+    setRefreshing(true)
+    try {
+      // Select active queries only after rolling-window subscribers have committed
+      // their new keys, so completion reflects the newly requested date range.
+      flushSync(() => window.dispatchEvent(new Event('dashboard:refresh-range')))
+      await queryClient.invalidateQueries({ queryKey: ['middleware'], refetchType: 'active' })
       const hasActiveError = queryClient
         .getQueryCache()
-        .getAll()
-        .some((query) => query.isActive() && query.state.status === 'error')
+        .findAll({ queryKey: ['middleware'], type: 'active' })
+        .some((query) => query.state.status === 'error')
       if (hasActiveError) {
-        toast.error('Middleware health refresh failed')
+        toast.error(
+          'Some dashboard reads could not be refreshed. Each page reports its data availability.',
+        )
         return
       }
       setRefreshed(new Date())
       toast.success('Active verified middleware reads refreshed')
-    })
+    } catch {
+      toast.error('Dashboard refresh failed. Try again.')
+    } finally {
+      setRefreshing(false)
+    }
   }
   const sidebarClass = `sidebar ${collapsed ? 'collapsed' : ''} ${mobileNav ? 'mobile-open' : ''}`
   return (
     <div className="app-frame">
-      <aside className={sidebarClass}>
+      <aside className={sidebarClass} id="dashboard-navigation" ref={navigationRef}>
         <div className="brand">
           <div className="brand-mark">
             <Activity size={19} />
@@ -289,7 +343,8 @@ function Shell() {
           <button
             className="icon-button collapse-button"
             onClick={() => setCollapsed(!collapsed)}
-            aria-label="Collapse sidebar"
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-expanded={!collapsed}
           >
             <ChevronLeft size={16} />
           </button>
@@ -365,8 +420,11 @@ function Shell() {
           <div className="topbar-left">
             <button
               className="icon-button mobile-menu"
+              ref={mobileMenuRef}
               onClick={() => setMobileNav(true)}
               aria-label="Open navigation"
+              aria-expanded={mobileNav}
+              aria-controls="dashboard-navigation"
             >
               <Menu size={19} />
             </button>
@@ -419,15 +477,18 @@ function Shell() {
               className="refresh-button"
               onClick={refresh}
               aria-label="Refresh active middleware reads"
+              disabled={refreshing}
+              aria-busy={refreshing}
             >
               <RefreshCw size={14} />
-              <span>Refresh</span>
+              <span>{refreshing ? 'Refreshing…' : 'Refresh'}</span>
             </button>
             <span className="last-refresh">
-              {apiMode === 'mock' ? 'Demo snapshot loaded' : 'Awaiting verified data'}{' '}
-              {new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit' }).format(
-                refreshed,
-              )}
+              {apiMode === 'mock'
+                ? 'Demo snapshot loaded'
+                : refreshed
+                  ? `Reads refreshed ${new Intl.DateTimeFormat('en', { hour: '2-digit', minute: '2-digit' }).format(refreshed)}`
+                  : 'Awaiting verified refresh'}
             </span>
             <NotificationCenter
               alerts={apiMode === 'mock' ? (demoData?.alerts ?? []) : []}
@@ -478,23 +539,31 @@ function Shell() {
                   </Protected>
                 }
               />
-              {(['manual-review', 'reconciliation', 'events', 'operations'] as const).map(
-                (family) => (
-                  <Route
-                    key={family}
-                    path={`/${family}`}
-                    element={
-                      <Protected>
-                        <ApiOperationCollection family={family} />
-                      </Protected>
-                    }
-                  />
-                ),
-              )}
+              <Route
+                path="/reconciliation"
+                element={
+                  <Protected>
+                    <ApiReceiptReconciliation />
+                  </Protected>
+                }
+              />
+              {(['manual-review', 'events', 'operations'] as const).map((family) => (
+                <Route
+                  key={family}
+                  path={`/${family}`}
+                  element={
+                    <Protected>
+                      <G03PreflightWarning />
+                      <ApiOperationCollection family={family} />
+                    </Protected>
+                  }
+                />
+              ))}
               <Route
                 path="/overview"
                 element={
                   <Protected>
+                    <G03PreflightWarning />
                     <ApiOverview range={globalRange} />
                   </Protected>
                 }
@@ -503,6 +572,7 @@ function Shell() {
                 path="/fiscalization"
                 element={
                   <Protected>
+                    <G03PreflightWarning />
                     <ApiFiscalization range={globalRange} />
                   </Protected>
                 }
@@ -519,7 +589,7 @@ function Shell() {
                 path="/device"
                 element={
                   <Protected>
-                    <ApiDevice />
+                    <G03Device />
                   </Protected>
                 }
               />
@@ -535,6 +605,7 @@ function Shell() {
                 path="/monitoring"
                 element={
                   <Protected>
+                    <G03PreflightWarning />
                     <ApiMonitoring />
                   </Protected>
                 }

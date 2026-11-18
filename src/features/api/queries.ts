@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { apiMode, getJson } from '@/lib/api/client'
 import { apiQueryKeys } from './queryKeys'
+import { serializeOverviewRange } from './overview-dates'
 import { refreshIntervalMs } from '@/lib/config'
 import {
   dashboardCapabilitiesSchema,
@@ -14,7 +15,6 @@ import {
   dashboardInvoiceDetailSchema,
   dashboardManualReviewQueryParamsSchema,
   dashboardManualReviewSchema,
-  dashboardOverviewQueryParamsSchema,
   dashboardOverviewSchema,
   dashboardReconciliationSchema,
   dashboardWritebacksUnavailableSchema,
@@ -112,7 +112,7 @@ export function buildDashboardCreditNoteListPath(params: DashboardCreditNotePara
 }
 
 export function buildDashboardOverviewPath(params: DashboardOverviewParams) {
-  return `/api/dashboard/overview${toQueryString(dashboardOverviewQueryParamsSchema.parse(params))}`
+  return `/api/dashboard/overview${toQueryString(serializeOverviewRange(params))}`
 }
 
 export function buildDashboardManualReviewPath(params: DashboardManualReviewParams) {
@@ -258,11 +258,12 @@ export function useDashboardDeviceDiagnosticsQuery() {
   )
 }
 
-export function useDashboardServiceHealthQuery() {
+export function useDashboardServiceHealthQuery(enabled = true) {
   return useDashboardRead(
     apiQueryKeys.dashboardServices(),
     '/api/dashboard/services',
     dashboardServiceHealthSchema,
+    enabled,
   )
 }
 

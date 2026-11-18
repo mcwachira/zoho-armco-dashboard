@@ -1,0 +1,52 @@
+.system-check {
+  display: grid;
+  justify-items: start;
+  gap: 12px;
+  padding: 20px;
+  overflow-wrap: anywhere;
+}
+.system-check p {
+  margin: 0;
+  color: var(--text-secondary, #a0a9b2);
+  line-height: 1.6;
+}
+.system-check small {
+  color: var(--text-secondary, #a0a9b2);
+}
+.system-telemetry {
+  margin-top: 20px;
+}
+.system-telemetry .table-scroll {
+  overflow-x: auto;
+}
+.system-telemetry table {
+  min-width: 500px;
+}
+.system-telemetry caption {
+  text-align: left;
+  padding: 18px 20px;
+  font-weight: 600;
+}
+.system-metric-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 32px;
+  padding: 20px;
+}
+.system-metric-summary > div {
+  display: grid;
+  gap: 8px;
+}
+.system-metric-summary strong {
+  font-size: 24px;
+}
+.system-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.system-links a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

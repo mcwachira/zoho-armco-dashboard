@@ -1,5 +1,9 @@
 # Dashboard authentication review
 
+For the current read-only proxy scope and verification, see the
+[secure BFF report](SECURE-BFF-REPORT.md). The operator-session discussion below is
+historical: fiscalization/writeback action handlers have now been removed.
+
 Reviewed locally on 2026-11-15. No production authentication configuration, deployment, middleware source, or device operations were changed.
 
 ## Existing controls retained

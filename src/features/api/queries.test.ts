@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { apiQueryKeys } from './queryKeys'
 import {
   buildDashboardCreditNoteListPath,
@@ -127,6 +127,107 @@ describe('dashboard API query contracts', () => {
         createdFrom: '2026-11-15T00:00:00Z',
         createdTo: '2026-11-14T00:00:00Z',
       }),
+    ).toThrow()
+  })
+})
+
+describe('Overview calendar date serialization', () => {
+  it('encodes Nairobi midnight and the final millisecond without shifting selected dates', () => {
+    const path = buildDashboardOverviewPath({
+      createdFrom: '2026-11-01',
+      createdTo: '2026-11-18',
+    })
+    expect(path).toBe(
+      '/api/dashboard/overview?createdFrom=2026-11-01T00%3A00%3A00.000%2B03%3A00&createdTo=2026-11-18T23%3A59%3A59.999%2B03%3A00',
+    )
+    const query = new URL(path, 'https://dashboard.test').searchParams
+    expect([...query.keys()]).toEqual(['createdFrom', 'createdTo'])
+    expect(query.get('createdFrom')).toBe('2026-11-01T00:00:00.000+03:00')
+    expect(query.get('createdTo')).toBe('2026-11-18T23:59:59.999+03:00')
+    // These are the UTC instants of the selected Nairobi calendar boundaries.
+    expect(new Date(query.get('createdFrom')!).toISOString()).toBe('2026-10-31T21:00:00.000Z')
+    expect(new Date(query.get('createdTo')!).toISOString()).toBe('2026-11-18T20:59:59.999Z')
+  })
+
+  it.each(['America/Los_Angeles', 'Asia/Tokyo', 'UTC'])(
+    'does not use the host timezone (%s) to interpret calendar inputs',
+    (timeZone) => {
+      vi.stubEnv('TZ', timeZone)
+      try {
+        const path = buildDashboardOverviewPath({
+          createdFrom: '2026-01-01',
+          createdTo: '2026-01-01',
+        })
+        const query = new URL(path, 'https://dashboard.test').searchParams
+        expect(query.get('createdFrom')).toBe('2026-01-01T00:00:00.000+03:00')
+        expect(query.get('createdTo')).toBe('2026-01-01T23:59:59.999+03:00')
+      } finally {
+        vi.unstubAllEnvs()
+      }
+    },
+  )
+
+  it('accepts a leap day and preserves the entire day', () => {
+    const path = buildDashboardOverviewPath({
+      createdFrom: '2024-02-29',
+      createdTo: '2024-02-29',
+    })
+    const query = new URL(path, 'https://dashboard.test').searchParams
+    expect(query.get('createdFrom')).toBe('2024-02-29T00:00:00.000+03:00')
+    expect(query.get('createdTo')).toBe('2024-02-29T23:59:59.999+03:00')
+  })
+
+  it.each([
+    ['2026-11-01T12:34:56.789Z', '2026-11-18T12:34:56.789Z'],
+    ['2026-11-01T09:15:00.123+03:00', '2026-11-18T17:45:00.456+03:00'],
+    ['2026-11-01T09:15:00.123-07:00', '2026-11-18T17:45:00.456-07:00'],
+  ])('preserves existing datetime values %s to %s', (createdFrom, createdTo) => {
+    const path = buildDashboardOverviewPath({ createdFrom, createdTo })
+    const query = new URL(path, 'https://dashboard.test').searchParams
+    expect(query.get('createdFrom')).toBe(createdFrom)
+    expect(query.get('createdTo')).toBe(createdTo)
+  })
+
+  it.each([
+    ['2026-11-19', '2026-11-18'],
+    ['2026-02-30', '2026-11-18'],
+    ['2026-11-01', '2026-02-29'],
+    ['2026-13-01', '2026-11-18'],
+    ['2026-11-1', '2026-11-18'],
+    ['2026-11-01T00:00:00', '2026-11-18T23:59:59'],
+    ['', '2026-11-18'],
+    ['2026-11-01', ''],
+    [undefined, '2026-11-18'],
+    ['2026-11-01', undefined],
+  ])('rejects invalid or missing bounds (%s, %s)', (createdFrom, createdTo) => {
+    expect(() => buildDashboardOverviewPath({ createdFrom, createdTo } as never)).toThrow()
+  })
+
+  it('validates mixed calendar/datetime bounds by their actual instants', () => {
+    expect(() =>
+      buildDashboardOverviewPath({
+        createdFrom: '2026-11-01',
+        createdTo: '2026-11-01T00:00:00Z',
+      }),
+    ).not.toThrow()
+    expect(() =>
+      buildDashboardOverviewPath({
+        createdFrom: '2026-11-01',
+        createdTo: '2026-10-31T20:59:59.999Z',
+      }),
+    ).toThrow()
+    expect(() =>
+      buildDashboardOverviewPath({
+        createdFrom: '2025-01-01',
+        createdTo: '2026-11-18',
+      }),
+    ).toThrow()
+    expect(() =>
+      buildDashboardOverviewPath({
+        createdFrom: '2026-11-01',
+        createdTo: '2026-11-18',
+        unexpected: 'ignored',
+      } as never),
     ).toThrow()
   })
 })

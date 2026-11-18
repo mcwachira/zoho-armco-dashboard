@@ -1,21 +1,29 @@
 import { z } from 'zod'
 import {
-  dashboardCapabilitiesSchema,
-  dashboardCreditNoteDetailSchema,
+  documentPageSchema,
+  documentDetailSchema,
+} from '../../src/features/api/document-contracts.js'
+import {
   dashboardCreditNotePageSchema,
   dashboardCreditNoteQueryParamsSchema,
-  dashboardDeviceDiagnosticsSchema,
-  dashboardInvoiceDetailSchema,
   dashboardInvoicePageSchema,
   dashboardInvoiceQueryParamsSchema,
   dashboardOverviewQueryParamsSchema,
   dashboardOverviewSchema,
   dashboardServiceHealthSchema,
 } from '../../src/features/api/schemas.js'
-import { writebackOperationsPageSchema } from '../../src/features/api/operation-contracts.js'
 
-// The local middleware contract owns paths and queries. Existing verified DTOs
-// are reused; missing DTO definitions deliberately do not become permissive JSON.
+// Existing reads plus four document mappings. Nested document projections are
+// explicitly provisional; authenticated gateway compatibility is unverified.
+export type DashboardGatewayPath =
+  | '/api/dashboard/overview'
+  | '/api/dashboard/invoices'
+  | '/api/dashboard/credit-notes'
+  | '/api/dashboard/services'
+  | '/api/dashboard/documents/invoices'
+  | '/api/dashboard/documents/credit-notes'
+  | '/api/dashboard/documents/invoices/{id}'
+  | '/api/dashboard/documents/credit-notes/{id}'
 const text = z.string().trim().min(1).max(128)
 const timestamp = z.string().datetime({ offset: true })
 export const dashboardIdQuery = z
@@ -57,18 +65,18 @@ const listQuery = z
   .superRefine(orderedDates)
 
 export interface DashboardReadRoute {
-  path: string
+  path?: DashboardGatewayPath
   query: z.ZodType
   response?: z.ZodType
-  detail?: 'invoice' | 'credit-note'
+  documentDetail?: boolean
   unavailable?: string
   unavailableCode?: string
 }
 
-const missingDocumentDto =
-  'The middleware contract documents this Zoho register/detail endpoint but does not specify its JSON field names and response DTO. No document data can be safely validated until that contract is supplied.'
-const missingOperationDto =
-  'The middleware contract documents this endpoint but does not specify its record response DTO. No operational records can be safely validated until that contract is supplied.'
+const unavailable = {
+  unavailableCode: 'GATEWAY_ROUTE_UNAVAILABLE',
+  unavailable: 'This resource is not enabled through the read-only dashboard gateway.',
+}
 
 export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
   invoices: {
@@ -82,27 +90,22 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     response: dashboardCreditNotePageSchema,
   },
   invoice: {
-    path: '/api/dashboard/invoices/{id}',
     query: dashboardIdQuery,
-    response: dashboardInvoiceDetailSchema,
-    detail: 'invoice',
+    ...unavailable,
   },
   'credit-note': {
-    path: '/api/dashboard/credit-notes/{id}',
     query: dashboardIdQuery,
-    response: dashboardCreditNoteDetailSchema,
-    detail: 'credit-note',
+    ...unavailable,
   },
   requests: {
+    // Existing UI alias; this adds no upstream route.
     path: '/api/dashboard/invoices',
     query: dashboardInvoiceQueryParamsSchema,
     response: dashboardInvoicePageSchema,
   },
   request: {
-    path: '/api/dashboard/invoices/{id}',
     query: dashboardIdQuery,
-    response: dashboardInvoiceDetailSchema,
-    detail: 'invoice',
+    ...unavailable,
   },
   overview: {
     path: '/api/dashboard/overview',
@@ -115,17 +118,14 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     response: dashboardServiceHealthSchema,
   },
   device: {
-    path: '/api/dashboard/device',
     query: noQuery,
-    response: dashboardDeviceDiagnosticsSchema,
+    ...unavailable,
   },
   capabilities: {
-    path: '/api/dashboard/capabilities',
     query: noQuery,
-    response: dashboardCapabilitiesSchema,
+    ...unavailable,
   },
   writebacks: {
-    path: '/api/dashboard/writebacks',
     query: z
       .object({
         ...page,
@@ -136,106 +136,72 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
       })
       .strict()
       .superRefine(orderedDates),
-    response: writebackOperationsPageSchema,
+    ...unavailable,
   },
   'manual-review': {
-    path: '/api/dashboard/manual-review',
     query: z
       .object({ ...page, ...dates, status: z.enum(['open', 'resolved']).optional() })
       .strict()
       .superRefine(orderedDates),
-    unavailable: missingOperationDto,
+    ...unavailable,
   },
   'manual-review-case': {
-    path: '/api/dashboard/manual-review/{id}',
     query: dashboardIdQuery,
-    unavailable: missingOperationDto,
+    ...unavailable,
   },
   reconciliation: {
-    path: '/api/dashboard/reconciliation',
     query: listQuery,
-    unavailable: missingOperationDto,
+    ...unavailable,
   },
   events: {
-    path: '/api/dashboard/events',
     query: z
       .object({ ...page, ...documentType, ...dates })
       .strict()
       .superRefine(orderedDates),
-    unavailable: missingOperationDto,
+    ...unavailable,
   },
   operations: {
-    path: '/api/dashboard/operations',
     query: z.object({ ...page, ...documentType }).strict(),
-    unavailable: missingOperationDto,
+    ...unavailable,
   },
   'documents/invoices': {
     path: '/api/dashboard/documents/invoices',
     query: documentQuery,
-    unavailable: missingDocumentDto,
+    response: documentPageSchema,
   },
   'documents/invoice': {
     path: '/api/dashboard/documents/invoices/{id}',
     query: dashboardIdQuery,
-    unavailable: missingDocumentDto,
+    documentDetail: true,
+    response: documentDetailSchema,
   },
   'documents/credit-notes': {
     path: '/api/dashboard/documents/credit-notes',
     query: documentQuery,
-    unavailable: missingDocumentDto,
+    response: documentPageSchema,
   },
   'documents/credit-note': {
     path: '/api/dashboard/documents/credit-notes/{id}',
     query: dashboardIdQuery,
-    unavailable: missingDocumentDto,
+    documentDetail: true,
+    response: documentDetailSchema,
   },
   health: {
-    path: '',
     query: z.object({ check: z.enum(['live', 'ready']) }).strict(),
     unavailableCode: 'CONTRACT_ROUTE_UNAVAILABLE',
     unavailable:
       'The middleware dashboard contract does not authorize service-bearer access to health probes. Use the documented services endpoint.',
   },
   telemetry: {
-    path: '',
     query: noQuery,
     unavailableCode: 'CONTRACT_ROUTE_UNAVAILABLE',
     unavailable:
       'The middleware dashboard contract does not authorize service-bearer access to integration metrics. Use the observability snapshot in services.',
   },
   writeback: {
-    path: '',
     query: dashboardIdQuery,
     unavailableCode: 'CONTRACT_ROUTE_UNAVAILABLE',
     unavailable:
       'The middleware contract exposes writeback mutation routes and persisted request writeback details, but no independent GET writeback-detail endpoint.',
   },
 }
-
-export const fiscalizeBodySchema = z
-  .object({
-    org_id: text,
-    document_type: z.enum(['INVOICE', 'CREDIT_NOTE']),
-    document_id: text,
-    source: z.literal('ZOHO_BOOKS_BUTTON'),
-  })
-  .strict()
-export const emptyBodySchema = z.object({}).strict()
-
-export const dashboardActionRoutes = {
-  'actions/fiscalize': {
-    path: '/api/dashboard/actions/fiscalize',
-    query: noQuery,
-    body: fiscalizeBodySchema,
-  },
-  'actions/invoice-writeback': {
-    path: '/api/dashboard/actions/invoices/{id}/writeback',
-    query: dashboardIdQuery,
-    body: emptyBodySchema,
-  },
-  'actions/credit-note-writeback': {
-    path: '/api/dashboard/actions/credit-notes/{id}/writeback',
-    query: dashboardIdQuery,
-    body: emptyBodySchema,
-  },
-} as const

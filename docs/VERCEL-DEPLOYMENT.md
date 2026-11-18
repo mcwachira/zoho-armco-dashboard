@@ -1,5 +1,11 @@
 # GitHub-to-Vercel deployment
 
+For the current 2026-11-18 mission, the user confirmed the existing project
+`zoho-armco-dashboard` at `https://zoho-armco-dashboard.vercel.app`.
+Use that existing target. See the [current deployment assessment](dashboard-deployment-readiness.md)
+for source configuration, verified installation inputs, live observations and
+remaining production dependencies. No push or deployment is authorized yet.
+
 This deployment serves the Vite SPA from `dist/` and the protected dashboard/auth handlers as Vercel Functions from `api/`. Browser requests are same-origin. Vercel discovers functions from the root `api/` directory, and its filesystem routing precedes rewrites, so the SPA rewrite is a fallback. No CORS allowlist is needed for this same-origin design. See [Vercel Function configuration](https://vercel.com/docs/project-configuration/vercel-json).
 
 ## Before deployment
@@ -8,7 +14,7 @@ This deployment serves the Vite SPA from `dist/` and the protected dashboard/aut
 2. Create a Google OAuth Web application. Register the exact callback URL `https://<dashboard-origin>/api/auth/callback`.
 3. Obtain a random `DASHBOARD_SESSION_SECRET` with at least 32 bytes. Configure only in Vercel; do not commit it.
 4. Decide the exact allowed dashboard user emails and roles. Do not create credentials for users without authorization.
-5. Verify the dedicated dashboard credential and four GET resources against desktop middleware on port 3004. Production configuration/deployment requires separate authorization.
+5. The separately supplied server investigation verifies the four GET paths and service bearer flow to middleware on port 3001. Actual response DTO compatibility and external Vercel reachability still require verification. Production configuration/deployment requires separate authorization.
 
 Generate a session secret locally with Node.js and paste the output directly into the Vercel server-only variable field:
 
@@ -18,7 +24,7 @@ node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('b
 
 ## Vercel project settings
 
-1. In Vercel choose **Add New → Project** and import the dashboard GitHub repository.
+1. In Vercel open the confirmed existing **zoho-armco-dashboard** project.
 2. Set the project root directory to the repository root.
 3. Framework preset: **Vite**.
 4. Install command: `pnpm install --frozen-lockfile`.
@@ -30,19 +36,29 @@ node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('b
 
 ## Environment variables
 
-| Name                          | Scope           | Required     | Purpose                                                                                         | Safe example                                                 | Vercel environments                                       | Sensitive                                   |
-| ----------------------------- | --------------- | ------------ | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------- |
-| `VITE_DATA_MODE`              | Public frontend | Yes          | Selects the dashboard API adapter in production. Must be `api`; production rejects `mock`.      | `api`                                                        | Production; Preview only when protected API is configured | No                                          |
-| `VITE_REFRESH_INTERVAL_MS`    | Public frontend | No           | Poll interval, clamped to at least 10 seconds. Defaults to 30000.                               | `30000`                                                      | Production/Preview                                        | No                                          |
-| `DASHBOARD_AUTH_URL`          | Server-only     | Yes          | Exact HTTPS origin for OAuth redirect and same-origin validation.                               | `https://dashboard.example.com`                              | Each enabled origin/environment                           | No                                          |
-| `DASHBOARD_SESSION_SECRET`    | Server-only     | Yes          | HMAC session and OAuth state signing key, at least 32 bytes. Use a random value.                | `<generate-random-32+-byte-secret>`                          | Production/Preview, unique per environment                | Yes                                         |
-| `GOOGLE_CLIENT_ID`            | Server-only     | Yes          | Google OAuth Web client identifier.                                                             | `<google-oauth-client-id>`                                   | Environments with login enabled                           | No (still keep server-side)                 |
-| `GOOGLE_CLIENT_SECRET`        | Server-only     | Yes          | Google OAuth code-exchange secret.                                                              | `<google-oauth-client-secret>`                               | Environments with login enabled                           | Yes                                         |
-| `DASHBOARD_ALLOWED_USERS`     | Server-only     | Yes          | JSON email-to-role allowlist. Roles: `admin`, `operator`, `viewer`. All roles remain read-only. | `{"ops@example.com":"admin","analyst@example.com":"viewer"}` | Production/Preview as appropriate                         | Contains personal data; treat as restricted |
-| `DASHBOARD_UPSTREAM_BASE_URL` | Server-only     | Yes for data | Exact HTTPS public gateway origin.                                                              | `https://g11server.tailaff2e5.ts.net`                        | Authorized Production/Preview                             | No                                          |
-| `DASHBOARD_UPSTREAM_TOKEN`    | Server-only     | Yes for data | Dedicated dashboard read service credential.                                                    | `<dashboard-service-credential>`                             | Authorized Production/Preview                             | Yes                                         |
+| Name                          | Scope           | Required          | Purpose                                                                                              | Safe example                                                 | Vercel environments                                       | Sensitive                                   |
+| ----------------------------- | --------------- | ----------------- | ---------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ | --------------------------------------------------------- | ------------------------------------------- |
+| `VITE_DATA_MODE`              | Public frontend | Yes               | Selects the dashboard API adapter in production. Must be `api`; production rejects `mock`.           | `api`                                                        | Production; Preview only when protected API is configured | No                                          |
+| `VITE_REFRESH_INTERVAL_MS`    | Public frontend | No                | Poll interval, clamped to at least 10 seconds. Defaults to 30000.                                    | `30000`                                                      | Production/Preview                                        | No                                          |
+| `DASHBOARD_AUTH_URL`          | Server-only     | Yes               | Exact HTTPS origin for OAuth redirect and same-origin validation.                                    | `https://dashboard.example.com`                              | Each enabled origin/environment                           | No                                          |
+| `DASHBOARD_SESSION_SECRET`    | Server-only     | Yes               | HMAC session and OAuth state signing key, at least 32 bytes. Use a random value.                     | `<generate-random-32+-byte-secret>`                          | Production/Preview, unique per environment                | Yes                                         |
+| `GOOGLE_CLIENT_ID`            | Server-only     | Yes               | Google OAuth Web client identifier.                                                                  | `<google-oauth-client-id>`                                   | Environments with login enabled                           | No (still keep server-side)                 |
+| `GOOGLE_CLIENT_SECRET`        | Server-only     | Yes               | Google OAuth code-exchange secret.                                                                   | `<google-oauth-client-secret>`                               | Environments with login enabled                           | Yes                                         |
+| `DASHBOARD_ALLOWED_USERS`     | Server-only     | Yes               | JSON email-to-role allowlist. Roles: `admin`, `operator`, `viewer`; G03 cancellation requires admin. | `{"ops@example.com":"admin","analyst@example.com":"viewer"}` | Production/Preview as appropriate                         | Contains personal data; treat as restricted |
+| `DASHBOARD_UPSTREAM_BASE_URL` | Server-only     | Yes for data      | Exact HTTPS public gateway origin.                                                                   | `https://g11server.tailaff2e5.ts.net`                        | Authorized Production/Preview                             | No                                          |
+| `DASHBOARD_UPSTREAM_TOKEN`    | Server-only     | Yes for data      | Same value as middleware `DASHBOARD_SERVICE_BEARER_TOKEN`; existing dashboard convention.            | `<dashboard-service-credential>`                             | Authorized Production/Preview                             | Yes                                         |
+| `DASHBOARD_USER_IDS`          | Server-only     | Yes for G03 relay | Approved email-to-internal-user-ID map; does not grant roles.                                        | `{"admin@example.test":"INTERNAL_ADMIN_ID"}`                 | Production/Preview with relay configured                  | Restricted identity data                    |
 
 Do not add any of these server-only values with a `VITE_` prefix. Never configure Zoho OAuth tokens, database credentials or G03 credentials here; the dashboard gateway does not use them. `VITE_AUTH_MODE` is local development-only and should not be configured in Vercel.
+
+The dashboard reads `DASHBOARD_UPSTREAM_BASE_URL` and `DASHBOARD_UPSTREAM_TOKEN`.
+`ZOHOAMARCO_GATEWAY_URL` and `DASHBOARD_SERVICE_BEARER_TOKEN` are not dashboard
+configuration aliases. No production variables were read or changed by this work.
+The separately supplied server investigation verifies the four exact GET paths
+and bearer authentication/forwarding to the same middleware paths at
+`127.0.0.1:3001`. Before deployment, compare sanitized responses with the existing
+strict DTOs and verify Vercel external reachability. No actual secret is needed
+for the local mocked suite or its dummy-secret browser-bundle test.
 
 ## Diagnosing `503 authentication_unavailable`
 
@@ -63,7 +79,7 @@ After correcting a setting, redeploy the affected environment. With valid auth c
 
 ### Current safe deployment configuration
 
-The server accepts the production gateway origin and requires a dedicated read credential. Missing upstream settings return `503 UPSTREAM_UNCONFIGURED`; no testing-only mode is required. Do not change production settings until the gateway and middleware authenticate the four GET routes, desktop verification passes, and deployment is separately authorized. Existing Google/session settings remain unchanged.
+The server accepts the production gateway origin and requires a dedicated read credential. Missing upstream settings return `503 UPSTREAM_UNCONFIGURED`; no testing-only mode is required. The supplied investigation verifies the gateway-to-middleware path locally, but external Vercel reachability and response DTO compatibility are still pending. Production setting changes and deployment require separate authorization. Existing Google/session settings remain unchanged.
 
 The Vercel Function does not establish Tailscale membership. A tailnet-only API is not reachable by assumption. Verify the actual network path from Vercel before enabling an upstream; do not expose production middleware to solve reachability.
 

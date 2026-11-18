@@ -1,5 +1,14 @@
 # Middleware contract gaps
 
+Confirmed gateway scope is four GET paths: overview, invoices, credit-notes and
+services. Four document mappings are now prepared locally for the separate
+gateway task, but success data is withheld pending exact DTOs. See
+[document integration status](DOCUMENT-API-INTEGRATION.md) and the
+[additional API gap analysis](API-INTEGRATION-GAPS.md) for exact document paths,
+queries, proposed gateway additions and required read-only server verification.
+The historical capability table below describes local contracts/UI plumbing;
+it does not establish current live forwarding.
+
 Reviewed 2026-11-15 using only the local `docs/dashboard-api-contract.md`.
 Middleware source is on another machine and was not accessed. The contract is
 already present; no transfer is requested. This replaces outdated dependency
@@ -27,3 +36,10 @@ supported documented operator-session integration for this separate dashboard.
 This is a contract/integration dependency, not a request to access server files
 or permission to weaken validation. No middleware code/configuration change,
 production operation, deployment, commit or push was performed.
+
+Current behavior superseding the historical table: request-detail,
+device/capability and operational handlers return authenticated
+`503 GATEWAY_ROUTE_UNAVAILABLE` without upstream access. Their schemas or UI
+components do not make those APIs gateway-accessible. Fiscalization and writeback
+action handlers are removed; no action integration is proposed for this read-only
+document task. The existing four forwarding integrations remain unchanged.

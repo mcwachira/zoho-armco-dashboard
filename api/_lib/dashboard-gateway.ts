@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
-import { dashboardActionRoutes, dashboardReadRoutes } from './dashboard-contracts.js'
+import { dashboardReadRoutes } from './dashboard-contracts.js'
+import type { DocumentDetail } from '../../src/features/api/document-contracts.js'
+import { receiptStateSchema, cancelReceiptSchema } from '../../src/features/api/device-contracts.js'
 import {
   requireDashboardSession,
   type DashboardSession,
@@ -67,23 +69,38 @@ function parseQuery(search: URLSearchParams) {
   return query
 }
 
-async function readBoundedJson(response: Response, maxBytes = 1_048_576): Promise<unknown> {
+async function readBoundedJson(
+  response: Response,
+  signal: AbortSignal,
+  maxBytes = 1_048_576,
+): Promise<unknown> {
   const declaredLength = Number(response.headers.get('content-length'))
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes)
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await response.body?.cancel()
     throw new Error('Upstream response too large')
+  }
   if (!response.body) throw new Error('Upstream body missing')
   const reader = response.body.getReader()
+  const abortRead = () => void reader.cancel().catch(() => undefined)
+  signal.addEventListener('abort', abortRead, { once: true })
   const chunks: Uint8Array[] = []
   let received = 0
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    received += value.byteLength
-    if (received > maxBytes) {
-      await reader.cancel()
-      throw new Error('Upstream response too large')
+  try {
+    if (signal.aborted) throw new Error('Upstream request timed out')
+    while (true) {
+      const { done, value } = await reader.read()
+      if (signal.aborted) throw new Error('Upstream request timed out')
+      if (done) break
+      received += value.byteLength
+      if (received > maxBytes) {
+        await reader.cancel()
+        throw new Error('Upstream response too large')
+      }
+      chunks.push(value)
     }
-    chunks.push(value)
+  } finally {
+    signal.removeEventListener('abort', abortRead)
+    reader.releaseLock()
   }
   const body = new Uint8Array(received)
   let offset = 0
@@ -102,7 +119,11 @@ export interface GatewayDependencies {
 
 const defaultDependencies: GatewayDependencies = {
   authorize: (req, res) =>
-    requireDashboardSession(req as VercelRequest, res as unknown as VercelResponse),
+    requireDashboardSession(req as VercelRequest, res as unknown as VercelResponse, [
+      'admin',
+      'operator',
+      'viewer',
+    ]),
   fetch,
   env: process.env,
 }
@@ -127,14 +148,17 @@ export async function handleDashboardRequest(
 
   let requestUrl: URL
   try {
+    if (!req.url?.startsWith('/api/dashboard/') || req.url.length > 8192 || req.url.includes('#'))
+      return reply(400, 'INVALID_QUERY', 'The dashboard request URL is invalid.')
     requestUrl = new URL(req.url ?? '/', 'https://dashboard.invalid')
+    if (requestUrl.pathname !== req.url.split('?')[0])
+      return reply(400, 'INVALID_QUERY', 'The dashboard request URL is invalid.')
   } catch {
     return reply(400, 'INVALID_QUERY', 'The dashboard request URL is invalid.')
   }
-  const segments = requestUrl.pathname.split('/').filter(Boolean)
-  if (segments[0] !== 'api' || segments[1] !== 'dashboard')
-    return reply(404, 'NOT_FOUND', 'Dashboard resource was not found.')
-  const resource = segments.slice(2).join('/')
+  // Preserve the exact local resource name. Collapsing empty segments would
+  // accept unsupported duplicate/trailing slash paths as an allowed resource.
+  const resource = requestUrl.pathname.slice('/api/dashboard/'.length)
   const definition = Object.hasOwn(dashboardReadRoutes, resource)
     ? dashboardReadRoutes[resource]
     : undefined
@@ -158,30 +182,49 @@ export async function handleDashboardRequest(
   const queryResult = definition.query.safeParse(normalizedQuery)
   if (!queryResult.success) return reply(400, 'INVALID_QUERY', 'Query parameters are invalid.')
 
-  if (definition.unavailable)
+  if (definition.unavailable || !definition.path)
     return reply(
       503,
       definition.unavailableCode ?? 'CONTRACT_SCHEMA_UNAVAILABLE',
-      definition.unavailable,
+      definition.unavailable ?? 'This gateway resource is unavailable.',
     )
-  const schema = definition.response!
+  const schema = definition.response
 
   // Keep route construction constrained to this fixed GET allowlist. No caller
   // supplied path is ever forwarded to an upstream service.
-  const id = (queryResult.data as { id?: string }).id
-  const route = definition.path.replace('{id}', encodeURIComponent(id ?? ''))
   const baseUrl = resolveUpstreamBase(dependencies.env)
   if (!baseUrl)
     return reply(503, 'UPSTREAM_UNCONFIGURED', 'Configure the HTTPS dashboard gateway origin.')
-  const token = dependencies.env.DASHBOARD_UPSTREAM_TOKEN?.trim()
-  if (!token || /\s/.test(token))
+  const token = dependencies.env.DASHBOARD_UPSTREAM_TOKEN
+  // RFC 6750 bearer syntax; reject whitespace/control characters rather than
+  // silently changing the configured credential.
+  if (!token || !/^[A-Za-z0-9._~+/-]+=*$/.test(token))
     return reply(
       503,
       'UPSTREAM_UNCONFIGURED',
       'Configure the dedicated dashboard service credential.',
     )
 
-  const target = new URL(route, baseUrl)
+  const documentId = (queryResult.data as { id?: string }).id
+  const upstreamPath = definition.documentDetail
+    ? definition.path.replace('{id}', encodeURIComponent(documentId!))
+    : definition.path
+  const target = new URL(upstreamPath, baseUrl)
+  const protectedValues = [
+    token,
+    baseUrl.origin,
+    baseUrl.hostname,
+    dependencies.env.DASHBOARD_SESSION_SECRET,
+    dependencies.env.GOOGLE_CLIENT_SECRET,
+  ].filter((value): value is string => Boolean(value))
+  const containsProtectedData = (value: unknown) => {
+    const serialized = JSON.stringify(value)
+    return protectedValues.some((secret) =>
+      [secret, encodeURIComponent(secret)].some((candidate) =>
+        serialized.includes(JSON.stringify(candidate).slice(1, -1)),
+      ),
+    )
+  }
   for (const [key, value] of Object.entries(
     queryResult.data as Record<string, string | number | undefined>,
   )) {
@@ -201,6 +244,7 @@ export async function handleDashboardRequest(
       },
       signal: controller.signal,
       redirect: 'error',
+      cache: 'no-store',
     })
     const upstreamId =
       upstream.headers.get('x-request-id') ?? upstream.headers.get('x-correlation-id')
@@ -208,7 +252,7 @@ export async function handleDashboardRequest(
       if (
         typeof value === 'string' &&
         /^[A-Za-z0-9._:-]{1,128}$/.test(value) &&
-        !value.includes(token)
+        !containsProtectedData(value)
       ) {
         requestId = value
         res.setHeader('X-Request-ID', requestId)
@@ -218,11 +262,12 @@ export async function handleDashboardRequest(
     if (!upstream.ok) {
       let code = 'UPSTREAM_UNAVAILABLE'
       try {
-        const body = await readBoundedJson(upstream, 16_384)
+        const body = await readBoundedJson(upstream, controller.signal, 16_384)
         const error = z
           .object({
             code: z.string().optional(),
             requestId: z.string().optional(),
+            request_id: z.string().optional(),
             correlationId: z.string().optional(),
             error: z
               .union([
@@ -247,14 +292,20 @@ export async function handleDashboardRequest(
             nested?.requestId ??
               nested?.correlationId ??
               error.data.requestId ??
-              error.data.correlationId,
+              error.data.correlationId ??
+              error.data.request_id,
           )
         }
-        if (candidate && /^[A-Z][A-Z0-9_]{0,79}$/.test(candidate) && !candidate.includes(token))
+        if (
+          candidate &&
+          /^[A-Z][A-Z0-9_]{0,79}$/.test(candidate) &&
+          !containsProtectedData(candidate)
+        )
           code = candidate
       } catch {
         /* Do not expose arbitrary upstream bodies or internal diagnostics. */
       }
+      if (controller.signal.aborted) throw new Error('Upstream request timed out')
       const authFailure = upstream.status === 401 || upstream.status === 403
       const status = authFailure ? 502 : upstream.status >= 400 ? upstream.status : 502
       const message =
@@ -265,10 +316,21 @@ export async function handleDashboardRequest(
             : `The middleware gateway returned HTTP ${upstream.status}.`
       return reply(status, code, message, upstream.status)
     }
+    if (!schema) {
+      // A future route must supply an explicit projection before any provider
+      // JSON can be returned. Document routes use isolated provisional bindings.
+      void upstream.body?.cancel().catch(() => undefined)
+      return reply(
+        503,
+        'CONTRACT_SCHEMA_UNAVAILABLE',
+        'The dashboard response contract is unavailable for this resource.',
+      )
+    }
     let payload: unknown
     try {
-      payload = await readBoundedJson(upstream)
+      payload = await readBoundedJson(upstream, controller.signal)
     } catch {
+      if (controller.signal.aborted) throw new Error('Upstream request timed out')
       return reply(
         502,
         'UPSTREAM_CONTRACT_ERROR',
@@ -282,13 +344,42 @@ export async function handleDashboardRequest(
         'UPSTREAM_CONTRACT_ERROR',
         'The middleware response did not match the dashboard contract.',
       )
-    const responseRecord = parsed.data as { request?: { requestId: string } }
-    if (definition.detail && responseRecord.request?.requestId !== id)
-      return reply(
-        502,
-        'UPSTREAM_CONTRACT_ERROR',
-        'The middleware response did not match the requested resource.',
+    if (definition.documentDetail) {
+      const detail = parsed.data as DocumentDetail
+      const expectedType = resource === 'documents/invoice' ? 'invoice' : 'credit_note'
+      const sourceId =
+        expectedType === 'invoice' ? detail.document.invoice_id : detail.document.creditnote_id
+      if (
+        detail.zohoDocumentId !== documentId ||
+        detail.documentType !== expectedType ||
+        (sourceId != null && sourceId !== documentId)
       )
+        return reply(
+          502,
+          'UPSTREAM_CONTRACT_ERROR',
+          'The middleware returned a different document identity.',
+        )
+    }
+    if (resource === 'overview') {
+      const overview = parsed.data as {
+        availability: string
+        range?: { createdFrom: string; createdTo: string }
+      }
+      const requestedRange = queryResult.data as { createdFrom: string; createdTo: string }
+      // The upstream can normalize offsets, but must describe the same instants.
+      // Valid JSON for another window must not be presented as selected-range data.
+      if (
+        overview.availability === 'available' &&
+        (!overview.range ||
+          Date.parse(overview.range.createdFrom) !== Date.parse(requestedRange.createdFrom) ||
+          Date.parse(overview.range.createdTo) !== Date.parse(requestedRange.createdTo))
+      )
+        return reply(
+          502,
+          'UPSTREAM_CONTRACT_ERROR',
+          'The middleware overview did not match the requested date range.',
+        )
+    }
     const requestedPage = queryResult.data as { page?: number; pageSize?: number }
     const returnedPage = parsed.data as {
       page?: number
@@ -302,7 +393,12 @@ export async function handleDashboardRequest(
         returnedPage.pageSize !== requestedPage.pageSize ||
         !Array.isArray(returnedPage.items) ||
         returnedPage.items.length > (returnedPage.pageSize ?? 0) ||
-        (typeof returnedPage.total === 'number' && returnedPage.items.length > returnedPage.total))
+        (typeof returnedPage.total === 'number' &&
+          returnedPage.items.length >
+            Math.max(
+              0,
+              returnedPage.total - (requestedPage.page - 1) * (returnedPage.pageSize ?? 0),
+            )))
     )
       return reply(
         502,
@@ -311,7 +407,7 @@ export async function handleDashboardRequest(
       )
     // A schema-valid response must still never echo the server-held credential.
     // Fail closed instead of returning a partially redacted operational record.
-    if (JSON.stringify(parsed.data).includes(token))
+    if (containsProtectedData(parsed.data))
       return reply(
         502,
         'UPSTREAM_CONTRACT_ERROR',
@@ -319,6 +415,8 @@ export async function handleDashboardRequest(
       )
     return res.status(upstream.status).json(parsed.data)
   } catch {
+    if (controller.signal.aborted)
+      return reply(504, 'UPSTREAM_TIMEOUT', 'The middleware gateway request timed out.')
     return reply(
       502,
       'UPSTREAM_UNAVAILABLE',
@@ -329,71 +427,287 @@ export async function handleDashboardRequest(
   }
 }
 
-/**
- * Dashboard mutations require two separate sessions. Local OIDC authenticates
- * the dashboard operator; it is not a middleware Better Auth session. Until the
- * authoritative contract defines a session bridge, these routes fail closed.
- * In particular, the GET-only service bearer must never be sent for a POST.
- */
-export async function handleDashboardAction(
+/** Explicit mapping from the existing verified dashboard role model. */
+const middlewareRoles = {
+  admin: 'administrator',
+  operator: 'operations',
+  viewer: 'viewer',
+} as const
+
+function relayUserId(email: string, env: Record<string, string | undefined>): string | null {
+  try {
+    const entries: unknown = JSON.parse(env.DASHBOARD_USER_IDS ?? '')
+    if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return null
+    const users = new Map<string, string>()
+    const ids = new Set<string>()
+    for (const [key, value] of Object.entries(entries)) {
+      const normalizedEmail = key.trim().toLowerCase()
+      if (
+        !normalizedEmail.includes('@') ||
+        users.has(normalizedEmail) ||
+        typeof value !== 'string' ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value) ||
+        ids.has(value)
+      )
+        return null
+      users.set(normalizedEmail, value)
+      ids.add(value)
+    }
+    return users.get(email.toLowerCase()) ?? null
+  } catch {
+    return null
+  }
+}
+
+/** Two fixed device routes reuse this gateway's auth, URL and bounded-read utilities. */
+export async function handleG03Request(
   req: ApiRequest,
   res: ApiResponse,
   dependencies: GatewayDependencies = defaultDependencies,
 ) {
-  const requestId = randomUUID()
-  const reply = (status: number, code: string, message: string) =>
-    send(res, status, code, message, requestId)
+  let requestId: string = randomUUID()
+  const reply = (status: number, code: string, message: string, upstreamStatus?: number) =>
+    send(res, status, code, message, requestId, upstreamStatus)
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Request-ID', requestId)
-  if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST')
-    return reply(405, 'METHOD_NOT_ALLOWED', 'Only POST is supported.')
+
+  const read = req.url === '/api/device/g03/current-receipt'
+  const cancel = req.url === '/api/device/g03/cancel-receipt'
+  if (!read && !cancel) return reply(404, 'NOT_FOUND', 'Device resource was not found.')
+  const method = cancel ? 'POST' : 'GET'
+  if (req.method !== method) {
+    res.setHeader('Allow', method)
+    return reply(405, 'METHOD_NOT_ALLOWED', 'This device route requires ' + method + '.')
   }
-  const operator = await dependencies.authorize(req, res)
-  if (!operator) return
-  if (!['admin', 'operator'].includes(operator.role))
+
+  const session = await dependencies.authorize(req, res)
+  if (!session) return
+  const role = Object.hasOwn(middlewareRoles, session.role)
+    ? middlewareRoles[session.role]
+    : undefined
+  if (!role || (cancel && role !== 'administrator'))
     return reply(
       403,
-      'OPERATOR_REQUIRED',
-      'An authenticated dashboard operator session is required.',
+      'ADMINISTRATOR_REQUIRED',
+      'An authenticated dashboard administrator is required.',
     )
 
-  const origin = req.headers.origin
-  const expectedOrigin = dependencies.env.DASHBOARD_AUTH_URL
-  if (typeof origin !== 'string' || !expectedOrigin || origin !== expectedOrigin)
-    return reply(403, 'INVALID_ORIGIN', 'The action must originate from this dashboard.')
-
-  let url: URL
-  try {
-    url = new URL(req.url ?? '/', 'https://dashboard.invalid')
-  } catch {
-    return reply(400, 'INVALID_QUERY', 'The dashboard request URL is invalid.')
+  if (cancel) {
+    const origin = req.headers.origin
+    const expectedOrigin = dependencies.env.DASHBOARD_AUTH_URL
+    if (!expectedOrigin)
+      return reply(
+        503,
+        'AUTH_ORIGIN_UNCONFIGURED',
+        'Configure DASHBOARD_AUTH_URL for administrator actions.',
+      )
+    if (
+      typeof origin !== 'string' ||
+      origin !== expectedOrigin ||
+      (req.headers['sec-fetch-site'] !== undefined &&
+        req.headers['sec-fetch-site'] !== 'same-origin')
+    )
+      return reply(403, 'INVALID_ORIGIN', 'Cancellation must originate from this dashboard.')
+    const contentType = req.headers['content-type']
+    if (typeof contentType !== 'string' || !/^application\/json(?:\s*;|$)/i.test(contentType))
+      return reply(415, 'INVALID_CONTENT_TYPE', 'Cancellation requires application/json.')
+    let body = req.body === undefined ? {} : req.body
+    if (typeof body === 'string') {
+      if (Buffer.byteLength(body, 'utf8') > 1024)
+        return reply(400, 'INVALID_BODY', 'Cancellation requires an empty JSON object.')
+      try {
+        body = body.trim() ? JSON.parse(body) : {}
+      } catch {
+        return reply(400, 'INVALID_BODY', 'Cancellation requires an empty JSON object.')
+      }
+    }
+    if (!body || typeof body !== 'object' || Array.isArray(body) || Object.keys(body).length !== 0)
+      return reply(400, 'INVALID_BODY', 'Cancellation requires an empty JSON object.')
   }
-  const resource = url.pathname.replace(/^\/api\/dashboard\//, '')
-  const definition = Object.hasOwn(dashboardActionRoutes, resource)
-    ? dashboardActionRoutes[resource as keyof typeof dashboardActionRoutes]
-    : undefined
-  if (!definition) return reply(404, 'NOT_FOUND', 'Dashboard action was not found.')
-  const query = parseQuery(url.searchParams)
-  if (!query || !definition.query.safeParse(query).success)
-    return reply(400, 'INVALID_QUERY', 'Action query parameters are invalid.')
 
-  let body = req.body ?? {}
-  if (typeof body === 'string') {
-    if (Buffer.byteLength(body, 'utf8') > 4096)
-      return reply(400, 'INVALID_BODY', 'Action payload exceeds its size limit.')
-    try {
-      body = body.trim() ? JSON.parse(body) : {}
-    } catch {
-      return reply(400, 'INVALID_BODY', 'Action payload must be JSON.')
+  const userId = relayUserId(session.email, dependencies.env)
+  if (!userId)
+    return reply(
+      503,
+      'DASHBOARD_IDENTITY_UNCONFIGURED',
+      'Configure DASHBOARD_USER_IDS with trusted internal IDs for approved users.',
+    )
+  const base = resolveUpstreamBase(dependencies.env)
+  if (!base)
+    return reply(
+      503,
+      'UPSTREAM_UNCONFIGURED',
+      'Configure DASHBOARD_UPSTREAM_BASE_URL as the HTTPS public gateway origin.',
+    )
+  const token = dependencies.env.DASHBOARD_UPSTREAM_TOKEN
+  if (!token || !/^[A-Za-z0-9._~+/-]+=*$/.test(token))
+    return reply(
+      503,
+      'UPSTREAM_UNCONFIGURED',
+      'Configure DASHBOARD_UPSTREAM_TOKEN on the dashboard server.',
+    )
+
+  const protectedValues = [
+    token,
+    base.origin,
+    base.hostname,
+    dependencies.env.DASHBOARD_SESSION_SECRET,
+    dependencies.env.GOOGLE_CLIENT_SECRET,
+    dependencies.env.DASHBOARD_USER_IDS,
+  ].filter((value): value is string => Boolean(value))
+  const protectedData = (value: unknown) => {
+    const serialized = JSON.stringify(value)
+    return protectedValues.some((secret) =>
+      [secret, encodeURIComponent(secret)].some((candidate) =>
+        serialized.includes(JSON.stringify(candidate).slice(1, -1)),
+      ),
+    )
+  }
+  const internalDiagnostic = (value: unknown): boolean => {
+    if (typeof value === 'string')
+      return /\bTraceback\b|node_modules|[A-Z]:\\|\/(?:home|var|etc)\/|\bat\s+\S+\s+\([^)]*:\d+:\d+\)/i.test(
+        value,
+      )
+    if (Array.isArray(value)) return value.some(internalDiagnostic)
+    return (
+      value !== null && typeof value === 'object' && Object.values(value).some(internalDiagnostic)
+    )
+  }
+  const retainId = (value: unknown) => {
+    if (
+      typeof value === 'string' &&
+      /^[A-Za-z0-9._:-]{1,128}$/.test(value) &&
+      !protectedData(value)
+    ) {
+      requestId = value
+      res.setHeader('X-Request-ID', requestId)
     }
   }
-  if (!definition.body.safeParse(body).success)
-    return reply(400, 'INVALID_BODY', 'Action payload does not match the middleware contract.')
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), cancel ? 20_000 : 8_000)
+  try {
+    const upstream = await dependencies.fetch(
+      new URL(
+        cancel
+          ? '/integrations/device/g03/cancel-receipt'
+          : '/integrations/device/g03/current-receipt',
+        base,
+      ),
+      {
+        method,
+        headers: {
+          Accept: 'application/json',
+          Authorization: 'Bearer ' + token,
+          'x-dashboard-user-id': userId,
+          'x-dashboard-role': role,
+          'X-Request-ID': requestId,
+          ...(cancel ? { 'Content-Type': 'application/json' } : {}),
+        },
+        ...(cancel ? { body: '{}' } : {}),
+        signal: controller.signal,
+        redirect: 'error',
+        cache: 'no-store',
+      },
+    )
+    const upstreamRequestId =
+      upstream.headers.get('x-request-id') ?? upstream.headers.get('x-correlation-id')
+    retainId(upstreamRequestId)
+    let payload: unknown
+    try {
+      payload = await readBoundedJson(upstream, controller.signal, 262_144)
+    } catch {
+      if (controller.signal.aborted) throw new Error('Timed out')
+      return reply(
+        502,
+        'UPSTREAM_CONTRACT_ERROR',
+        'The device gateway returned invalid or oversized JSON.',
+      )
+    }
+    const schema = cancel ? cancelReceiptSchema : receiptStateSchema
+    const result = schema.safeParse(payload)
+    if (
+      result.success &&
+      (upstream.ok ||
+        (cancel &&
+          upstream.status >= 400 &&
+          upstream.status !== 401 &&
+          'success' in result.data &&
+          result.data.success === false))
+    ) {
+      if (protectedData(result.data) || internalDiagnostic(result.data))
+        return reply(
+          502,
+          'UPSTREAM_CONTRACT_ERROR',
+          'The device response contained protected server data.',
+        )
+      return res.status(upstream.status).json(result.data)
+    }
+    if (upstream.ok)
+      return reply(
+        502,
+        'UPSTREAM_CONTRACT_ERROR',
+        'The device response did not match the confirmed receipt contract.',
+      )
 
-  return reply(
-    503,
-    'OPERATOR_SESSION_UNAVAILABLE',
-    'The middleware requires its own Better Auth operator session with dashboard:operate. The local contract does not define a session exchange or forwarding mechanism for the dashboard OIDC session. The operation was not submitted.',
-  )
+    const errorEnvelope = z
+      .object({
+        code: z.string().optional(),
+        message: z.string().optional(),
+        requestId: z.string().optional(),
+        request_id: z.string().optional(),
+        error: z
+          .union([
+            z.string(),
+            z.object({
+              code: z.string().optional(),
+              message: z.string().optional(),
+              requestId: z.string().optional(),
+            }),
+          ])
+          .optional(),
+      })
+      .safeParse(payload)
+    let code = 'UPSTREAM_UNAVAILABLE'
+    let message = 'The device gateway returned HTTP ' + upstream.status + '.'
+    if (errorEnvelope.success) {
+      const value = errorEnvelope.data
+      const nested = typeof value.error === 'object' ? value.error : undefined
+      if (!upstreamRequestId) retainId(nested?.requestId ?? value.requestId ?? value.request_id)
+      const candidate = nested?.code ?? value.code
+      const detail = nested?.message ?? value.message
+      if (candidate && /^[A-Z][A-Z0-9_]{0,79}$/.test(candidate) && !protectedData(candidate)) {
+        code = candidate
+        if (
+          detail &&
+          detail.length <= 500 &&
+          !protectedData(detail) &&
+          !/[\r\n<>]|\bstack\b|\btraceback\b|node_modules|[A-Z]:\\|\/(?:home|var|etc)\//i.test(
+            detail,
+          )
+        )
+          message = detail
+      }
+    }
+    // A middleware credential failure must not expire the valid local login.
+    return reply(
+      upstream.status === 401 || upstream.status < 400 ? 502 : upstream.status,
+      code,
+      message,
+      upstream.status,
+    )
+  } catch {
+    return controller.signal.aborted
+      ? reply(
+          504,
+          'UPSTREAM_TIMEOUT',
+          'The device operation timed out; its outcome is not confirmed. Refresh the receipt state.',
+        )
+      : reply(
+          502,
+          'UPSTREAM_UNAVAILABLE',
+          'The device gateway could not be reached. The operation outcome is not confirmed.',
+        )
+  } finally {
+    clearTimeout(timeout)
+  }
 }

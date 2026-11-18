@@ -1,4 +1,4 @@
-// @vitest-environment jsdom
+﻿// @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -76,8 +76,121 @@ describe('documented fiscalization request history', () => {
       true,
     )
     expect(screen.getByText(/read bearer cannot authorize/)).toBeInTheDocument()
+    expect(screen.getByText(/not the complete Zoho Books registers/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/Documents never submitted to middleware are not included/),
+    ).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /retry/i })).not.toBeInTheDocument()
   }, 15_000)
+  it.each(['invoice', 'credit_note'] as const)(
+    'shows confirmed %s receipt evidence from list data even when request details are unavailable',
+    async (kind) => {
+      const source = kind === 'invoice' ? mockInvoices[0] : mockCreditNotes[0]
+      const row = {
+        ...source,
+        confirmedReceiptEvidence: true,
+        receiptNumber: '000123456',
+        qrCode: 'https://verification.example.test/?invoiceNo=000123456',
+        fiscalizedAt: '2026-11-18T10:00:00Z',
+      }
+      const fetch = vi.fn(async () => json({ page: 1, pageSize: 25, total: 1, items: [row] }))
+      await mount(fetch, `/requests?kind=${kind}`)
+      const rendered = (await screen.findByText(source.documentNumber!)).closest('tr')!
+      expect(within(rendered).getByText('000123456')).toBeInTheDocument()
+      expect(within(rendered).getByRole('link', { name: /Open persisted QR/ })).toHaveAttribute(
+        'href',
+        row.qrCode,
+      )
+      expect(rendered.querySelector('time[datetime="2026-11-18T10:00:00Z"]')).toBeInTheDocument()
+      expect(fetch).toHaveBeenCalledOnce()
+    },
+  )
+  it('does not turn unconfirmed or inconsistent list evidence into a confirmed receipt', async () => {
+    const row = {
+      ...mockInvoices[0],
+      confirmedReceiptEvidence: false,
+      receiptNumber: 'UNCONFIRMED-RECEIPT',
+      qrCode: 'https://verification.example.test/?invoiceNo=UNCONFIRMED-RECEIPT',
+      fiscalizedAt: '2026-11-18T10:00:00Z',
+    }
+    await mount(vi.fn(async () => json({ page: 1, pageSize: 25, total: 1, items: [row] })))
+    expect(await screen.findByText('No confirmed receipt')).toBeInTheDocument()
+    expect(screen.queryByText('UNCONFIRMED-RECEIPT')).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: /Open persisted QR/ })).not.toBeInTheDocument()
+  })
+  it('rejects malformed request IDs without opening a drawer or fetching details', async () => {
+    const fetch = requestFetch()
+    await mount(fetch, '/requests?id=..%2Fservices')
+    expect(screen.getByRole('alert')).toHaveTextContent('The request ID is invalid')
+    await screen.findByText(mockInvoices[0].documentNumber!)
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+    expect(fetch.mock.calls.every(([path]) => path.startsWith('/api/dashboard/invoices?'))).toBe(
+      true,
+    )
+  })
+  it.each([
+    'page=garbage',
+    'page=0',
+    'page=1e2',
+    'pageSize=101',
+    'from=2026-02-30',
+    'from=not-a-date',
+    'from=2026-11-18&to=2026-11-01',
+    'from=2024-01-01&to=2026-11-18',
+    'status=MADE_UP',
+    'kind=unknown',
+  ])('rejects invalid request filters without broadening the query: %s', async (query) => {
+    const fetch = requestFetch()
+    await mount(fetch, `/requests?${query}`)
+    expect(screen.getByRole('alert')).toHaveTextContent('Request filters are invalid')
+    expect(screen.getByRole('button', { name: 'Refresh requests' })).toBeDisabled()
+    expect(fetch).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: 'Clear filters' }))
+    await screen.findByText(mockInvoices[0].documentNumber!)
+    expect(fetch).toHaveBeenCalledOnce()
+  })
+  it.each([
+    ['invoice', 'Pending', null],
+    ['invoice', 'InProgress', null],
+    ['invoice', 'Failed', null],
+    ['invoice', 'OutcomeUnknown', null],
+    ['invoice', 'Failed', 'reconciliation_required'],
+    ['credit_note', 'PENDING', null],
+    ['credit_note', 'IN_PROGRESS', null],
+    ['credit_note', 'FAILED', null],
+    ['credit_note', 'RECONCILIATION_REQUIRED', 'reconciliation_required'],
+    ['credit_note', 'MANUAL_REVIEW_REQUIRED', null],
+  ] as const)(
+    'displays %s execution %s and reconciliation %s without inferring a physical receipt state',
+    async (kind, execution, reconciliation) => {
+      const source = kind === 'invoice' ? mockInvoices[0] : mockCreditNotes[1]
+      const row = {
+        ...source,
+        fiscalizationStatus: execution,
+        reconciliationStatus: reconciliation,
+        confirmedReceiptEvidence: false,
+        receiptNumber: null,
+        qrCode: null,
+        fiscalizedAt: null,
+      }
+      const fetch = vi.fn(async () => json({ page: 1, pageSize: 25, total: 1, items: [row] }))
+      await mount(fetch, `/requests?kind=${kind}`)
+      const rendered = (await screen.findByText(source.documentNumber!)).closest('tr')!
+      expect(within(rendered).getByText(execution)).toBeInTheDocument()
+      if (reconciliation) expect(within(rendered).getByText(reconciliation)).toBeInTheDocument()
+      expect(screen.getByText(/not the current physical G03 receipt state/)).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: 'View current G03 receipt state' })).toHaveAttribute(
+        'href',
+        '/device',
+      )
+      expect(screen.queryByRole('heading', { name: /Receipt state:/ })).not.toBeInTheDocument()
+      expect(
+        screen.queryByRole('button', { name: /retry|resubmit|cancel|fiscalize/i }),
+      ).not.toBeInTheDocument()
+      expect(fetch.mock.calls.length).toBeGreaterThan(0)
+    },
+  )
+
   it('loads credit-note requests and manual-review state without fabricating customer data', async () => {
     const fetch = requestFetch()
     await mount(fetch, '/requests?kind=credit_note&status=MANUAL_REVIEW_REQUIRED')
@@ -217,5 +330,160 @@ describe('documented fiscalization request history', () => {
     await screen.findByText('No requests match these filters.')
     expect(screen.getByText('0 matching requests - Page 1')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled()
+  })
+})
+
+describe('invoice and credit-note processing error visibility', () => {
+  it.each(['invoice', 'credit_note'] as const)(
+    'shows %s identity, failed stage, errors, uncertainty and separate writeback evidence',
+    async (kind) => {
+      const invoice = mockInvoiceDetails[mockInvoices[0].requestId]!.request
+      const credit = mockCreditNoteDetails[mockCreditNotes[1].requestId]!.request
+      const source = kind === 'invoice' ? invoice : credit
+      const stage = kind === 'invoice' ? 'close_receipt' : 'close_credit_note'
+      const code = kind === 'invoice' ? 'G03_TIMEOUT' : 'G03_COMMAND_REJECTED'
+      const message = 'The recorded device operation did not provide a confirmed result.'
+      const attempt =
+        kind === 'invoice'
+          ? {
+              ...invoice.attempts[0]!,
+              stage,
+              outcome: 'OutcomeUnknown',
+              errorCode: code,
+              errorMessage: message,
+            }
+          : {
+              ...credit.attempts[0]!,
+              stage,
+              status: 'RECONCILIATION_REQUIRED',
+              errorCategory: code,
+              errorDetails: message,
+              deviceEvidence: [],
+            }
+      const writeback = {
+        status: 'failed',
+        writtenCustomFieldIds: [],
+        errorCategory: 'ZOHO_UPDATE_REJECTED',
+        createdAt: '2026-11-17T10:00:00Z',
+        updatedAt: '2026-11-17T10:01:00Z',
+        completedAt: null,
+        ...(kind === 'invoice' ? { retryCount: 1 } : {}),
+      }
+      const request = {
+        ...source,
+        fiscalizationStatus: kind === 'invoice' ? 'OutcomeUnknown' : 'RECONCILIATION_REQUIRED',
+        confirmedReceiptEvidence: false,
+        receiptNumber: null,
+        qrCode: null,
+        fiscalizedAt: null,
+        attempts: [attempt],
+        evidence: null,
+        writeback,
+        writebackStatus: 'failed',
+        lastError: { code, message },
+      }
+      const fallback = requestFetch()
+      const fetch = vi.fn(async (path: string) =>
+        path.includes(kind === 'invoice' ? '/invoice?' : '/credit-note?')
+          ? json({ request })
+          : fallback(path),
+      )
+      await mount(fetch, '/requests?kind=' + kind + '&id=' + source.requestId)
+      const dialog = await screen.findByRole('dialog')
+      const diagnostics = await within(dialog).findByRole('region', {
+        name: 'Processing diagnostics',
+      })
+      expect(within(diagnostics).getByText(source.documentNumber!)).toBeInTheDocument()
+      expect(within(diagnostics).getByText(source.requestId)).toBeInTheDocument()
+      expect(within(diagnostics).getByText(stage)).toBeInTheDocument()
+      expect(within(diagnostics).getByText(code)).toBeInTheDocument()
+      expect(within(diagnostics).getByText(message)).toBeInTheDocument()
+      expect(within(diagnostics).getByText('Device contact').nextElementSibling).toHaveTextContent(
+        'Not established by this API response; an attempt alone does not prove contact',
+      )
+      expect(
+        within(diagnostics).getByText('Fiscal receipt outcome').nextElementSibling,
+      ).toHaveTextContent('No confirmed fiscal receipt evidence')
+      expect(
+        within(diagnostics).getByText('Zoho writeback state').nextElementSibling,
+      ).toHaveTextContent('failed')
+      expect(within(diagnostics).getByText('ZOHO_UPDATE_REJECTED')).toBeInTheDocument()
+      expect(diagnostics).toHaveTextContent('whether the G03 currently has an open receipt')
+      expect(fetch.mock.calls.every(([path]) => path.startsWith('/api/dashboard/'))).toBe(true)
+    },
+  )
+
+  it('does not invent a failed stage or device contact when no attempt is persisted', async () => {
+    const source = mockInvoiceDetails[mockInvoices[0].requestId]!.request
+    const fallback = requestFetch()
+    const fetch = vi.fn(async (path: string) =>
+      path.includes('/invoice?')
+        ? json({
+            request: {
+              ...source,
+              fiscalizationStatus: 'Failed',
+              confirmedReceiptEvidence: false,
+              attempts: [],
+              evidence: null,
+              receiptNumber: null,
+              qrCode: null,
+              fiscalizedAt: null,
+              lastError: {
+                code: 'VALIDATION_REJECTED',
+                message: 'The document failed validation.',
+              },
+            },
+          })
+        : fallback(path),
+    )
+    await mount(fetch, '/requests?id=' + source.requestId)
+    const diagnostics = await screen.findByRole('region', { name: 'Processing diagnostics' })
+    expect(
+      within(diagnostics).getByText('Latest stage with recorded error').nextElementSibling,
+    ).toHaveTextContent('Not reported')
+    expect(
+      within(diagnostics).getByText('Recorded attempt outcome').nextElementSibling,
+    ).toHaveTextContent('Not reported')
+    expect(within(diagnostics).getByText('VALIDATION_REJECTED')).toBeInTheDocument()
+    expect(within(diagnostics).getByText('The document failed validation.')).toBeInTheDocument()
+    expect(within(diagnostics).getByText('Device contact').nextElementSibling).toHaveTextContent(
+      'Not established',
+    )
+  })
+
+  it('retains confirmed fiscal evidence when only Zoho writeback failed', async () => {
+    const source = mockInvoiceDetails[mockInvoices[0].requestId]!.request
+    const fallback = requestFetch()
+    const fetch = vi.fn(async (path: string) =>
+      path.includes('/invoice?')
+        ? json({
+            request: {
+              ...source,
+              writebackStatus: 'failed',
+              writeback: {
+                ...source.writeback!,
+                status: 'failed',
+                errorCategory: 'ZOHO_UPDATE_REJECTED',
+              },
+            },
+          })
+        : fallback(path),
+    )
+    await mount(fetch, '/requests?id=' + source.requestId)
+    const diagnostics = await screen.findByRole('region', { name: 'Processing diagnostics' })
+    expect(
+      within(diagnostics).getByText('Recorded processing state').nextElementSibling,
+    ).toHaveTextContent('Succeeded')
+    expect(
+      within(diagnostics).getByText('Fiscal receipt outcome').nextElementSibling,
+    ).toHaveTextContent('Confirmed fiscal receipt evidence persisted')
+    expect(within(diagnostics).getByText('Device contact').nextElementSibling).toHaveTextContent(
+      'Confirmed by persisted receipt evidence',
+    )
+    expect(
+      within(diagnostics).getByText('Zoho writeback state').nextElementSibling,
+    ).toHaveTextContent('failed')
+    expect(within(diagnostics).getByText('ZOHO_UPDATE_REJECTED')).toBeInTheDocument()
+    expect(screen.queryByText('Receipt state: OPEN')).not.toBeInTheDocument()
   })
 })

@@ -3,7 +3,10 @@ import { Link, useSearchParams } from 'react-router-dom'
 import { apiMode } from '@/lib/api/client'
 import { useDashboardInvoiceListQuery, useDashboardCreditNoteListQuery } from './queries'
 import { RecordDrawer, statusBadgeTone } from './ApiOperationalPages'
+import { safeVerificationUrl } from './reconciliation-contracts'
 import {
+  dashboardCreditNoteQueryParamsSchema,
+  dashboardInvoiceQueryParamsSchema,
   creditNoteFiscalizationStateSchema,
   invoiceFiscalizationStatusSchema,
   invoiceReconciliationStatusSchema,
@@ -20,11 +23,14 @@ import './documents.css'
 function dateBoundary(value: string, end = false) {
   if (!value) return undefined
   const date = new Date(`${value}T${end ? '23:59:59.999' : '00:00:00.000'}Z`)
-  return Number.isFinite(date.getTime()) ? date.toISOString() : undefined
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+    Number.isFinite(date.getTime()) &&
+    date.toISOString().slice(0, 10) === value
+    ? date.toISOString()
+    : 'invalid'
 }
 function positiveInteger(value: string | null, fallback: number) {
-  const number = Number(value)
-  return Number.isSafeInteger(number) && number > 0 ? number : fallback
+  return value === null ? fallback : /^\d+$/.test(value) ? Number(value) : NaN
 }
 function Status({ value }: { value: string | null }) {
   return (
@@ -39,6 +45,7 @@ export function ApiRequests() {
   const page = positiveInteger(params.get('page'), 1)
   const pageSize = positiveInteger(params.get('pageSize'), 25)
   const id = params.get('id')?.trim() ?? ''
+  const validId = !id || /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
   const [lookup, setLookup] = useState('')
   const search = params.get('search') ?? ''
   const [draftSearch, setDraftSearch] = useState(search)
@@ -52,28 +59,32 @@ export function ApiRequests() {
     createdTo: dateBoundary(params.get('to') ?? '', true),
   }
   const common = { page, pageSize, search: search || undefined, ...dates }
-  const invoices = useDashboardInvoiceListQuery(
-    {
-      ...common,
-      status: status ? (status as DashboardInvoiceStatus) : undefined,
-      reconciliationStatus: reconciliation
-        ? (reconciliation as DashboardInvoiceReconciliationStatus)
-        : undefined,
-      writebackStatus: writeback ? (writeback as DashboardInvoiceWritebackFilter) : undefined,
-      transmissionStatus: transmission
-        ? (transmission as DashboardInvoiceTransmissionStatus)
-        : undefined,
-    },
-    kind === 'invoice',
-  )
+  const invoiceParams = {
+    ...common,
+    status: status ? (status as DashboardInvoiceStatus) : undefined,
+    reconciliationStatus: reconciliation
+      ? (reconciliation as DashboardInvoiceReconciliationStatus)
+      : undefined,
+    writebackStatus: writeback ? (writeback as DashboardInvoiceWritebackFilter) : undefined,
+    transmissionStatus: transmission
+      ? (transmission as DashboardInvoiceTransmissionStatus)
+      : undefined,
+  }
+  const creditNoteParams = {
+    ...common,
+    state: status ? (status as DashboardCreditNoteState) : undefined,
+    reconciliationState: reconciliation || undefined,
+    writebackState: writeback || undefined,
+  }
+  const validFilters =
+    (!params.has('kind') || ['invoice', 'credit_note'].includes(params.get('kind')!)) &&
+    (kind === 'invoice'
+      ? dashboardInvoiceQueryParamsSchema.safeParse(invoiceParams).success
+      : dashboardCreditNoteQueryParamsSchema.safeParse(creditNoteParams).success)
+  const invoices = useDashboardInvoiceListQuery(invoiceParams, kind === 'invoice' && validFilters)
   const creditNotes = useDashboardCreditNoteListQuery(
-    {
-      ...common,
-      state: status ? (status as DashboardCreditNoteState) : undefined,
-      reconciliationState: reconciliation || undefined,
-      writebackState: writeback || undefined,
-    },
-    kind === 'credit_note',
+    creditNoteParams,
+    kind === 'credit_note' && validFilters,
   )
   const query = kind === 'invoice' ? invoices : creditNotes
   const rows = query.data?.items
@@ -92,7 +103,7 @@ export function ApiRequests() {
 
   return (
     <>
-      <div className="page-heading">
+      <div className="page-heading request-heading">
         <div>
           <span className="eyebrow">OPERATIONS</span>
           <h1>Fiscalization requests</h1>
@@ -103,16 +114,20 @@ export function ApiRequests() {
         </div>
         <button
           className="button secondary"
-          disabled={query.isFetching}
+          disabled={!validFilters || query.isFetching}
           onClick={() => void query.refetch()}
         >
           Refresh requests
         </button>
       </div>
-      <div className="api-source-note">
-        This register contains requests submitted to middleware. Never-submitted documents belong in
-        the <Link to="/invoices">invoice</Link> and <Link to="/credit-notes">credit-note</Link>{' '}
-        registers. A submitted request or historical attempt does not confirm a fiscal receipt.
+      <div className="api-source-note request-scope-note">
+        This history contains only requests submitted to middleware, not the complete Zoho Books
+        registers. Documents never submitted to middleware are not included. Open the{' '}
+        <Link to="/invoices">invoice</Link> and <Link to="/credit-notes">credit-note</Link>{' '}
+        registers for source documents; availability depends on the configured middleware document
+        API. A submitted request or historical attempt does not confirm a fiscal receipt. Execution
+        and reconciliation statuses describe persisted workflow history, not the current physical
+        G03 receipt state. <Link to="/device">View current G03 receipt state</Link>.
       </div>
       {apiMode !== 'api' && (
         <p className="api-source-note" role="status">
@@ -130,7 +145,12 @@ export function ApiRequests() {
         >
           <label className="document-search">
             Search requests
-            <input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} />
+            <input
+              type="search"
+              maxLength={128}
+              value={draftSearch}
+              onChange={(event) => setDraftSearch(event.target.value)}
+            />
           </label>
           <button className="button secondary">Search</button>
         </form>
@@ -271,7 +291,21 @@ export function ApiRequests() {
         </label>
         <button className="button secondary">Open request</button>
       </form>
-      {query.isLoading && <p role="status">Loading persisted middleware requests...</p>}
+      {!validId && (
+        <p role="alert">
+          The request ID is invalid. Enter the middleware request ID using letters, numbers,
+          underscores or hyphens (maximum 128 characters).
+        </p>
+      )}
+      {!validFilters && (
+        <p role="alert">
+          Request filters are invalid. Check the document type, page, page size, statuses and UTC
+          date range. Clear filters to retrieve history.
+        </p>
+      )}
+      {validFilters && query.isLoading && (
+        <p role="status">Loading persisted middleware requests...</p>
+      )}
       {query.isError && (
         <p role="alert">
           Request data unavailable:{' '}
@@ -299,6 +333,9 @@ export function ApiRequests() {
                     'Transmission',
                     'Reconciliation',
                     'Zoho writeback',
+                    'CU receipt number',
+                    'KRA verification',
+                    'Fiscalized at',
                     'Attempts',
                     'Latest update',
                     'Latest error',
@@ -345,6 +382,35 @@ export function ApiRequests() {
                     <td>
                       <Status value={row.writebackStatus} />
                     </td>
+                    <td className="document-mono">
+                      {row.confirmedReceiptEvidence
+                        ? (row.receiptNumber ?? 'Unavailable')
+                        : 'No confirmed receipt'}
+                    </td>
+                    <td>
+                      {row.confirmedReceiptEvidence && safeVerificationUrl(row.qrCode) ? (
+                        <a
+                          className="document-number"
+                          href={safeVerificationUrl(row.qrCode)!}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          referrerPolicy="no-referrer"
+                        >
+                          Open persisted QR / verification
+                        </a>
+                      ) : (
+                        'Unavailable'
+                      )}
+                    </td>
+                    <td>
+                      {row.confirmedReceiptEvidence && row.fiscalizedAt ? (
+                        <time dateTime={row.fiscalizedAt}>
+                          {new Date(row.fiscalizedAt).toLocaleString()}
+                        </time>
+                      ) : (
+                        'Unavailable'
+                      )}
+                    </td>
                     <td>{row.attemptCount}</td>
                     <td>
                       <time dateTime={row.updatedAt}>
@@ -385,14 +451,14 @@ export function ApiRequests() {
           </div>
         </>
       )}
-      <div className="api-source-note">
+      <div className="api-source-note request-scope-note">
         Fiscalization retry and Retry Zoho Writeback require a middleware operator session. The
         dashboard read bearer cannot authorize either action. The supplied contract does not define
         how this dashboard establishes that session or the complete action response schemas;
         operational actions remain unavailable until those integration details are supplied. Retry
         eligibility stays with middleware.
       </div>
-      {id && (
+      {id && validId && (
         <RecordDrawer selected={{ kind, id }} onClose={() => update({ id: undefined }, false)} />
       )}
     </>

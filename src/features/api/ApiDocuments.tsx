@@ -1,34 +1,67 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { AlertCircle, ArrowLeft, FileText, RefreshCw, Search } from 'lucide-react'
+import {
+  AlertCircle,
+  ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  FileText,
+  RefreshCw,
+  Search,
+} from 'lucide-react'
 import { apiMode, getJson } from '@/lib/api/client'
 import {
   documentDetailPath,
   documentListPath,
   documentQuerySchema,
-  undocumentedDocumentResponseSchema,
+  documentPageSchema,
+  documentDetailSchema,
   type DocumentKind,
   type DocumentQuery,
 } from './document-contracts'
+import {
+  documentAmount,
+  documentDate,
+  documentNumber,
+  zohoId,
+  type ProvisionalFiscalization,
+} from './document-provisional'
+import { DocumentDetailView, DocumentStatus, RelatedInvoice } from './DocumentDetailView'
+import { ReceiptReconciliation, ReconciliationBadge } from './ReceiptReconciliation'
+import {
+  receiptReconciliationStatuses,
+  resolveReceiptReconciliation,
+  safeVerificationUrl,
+} from './reconciliation-contracts'
 import './api-operational-pages.css'
 import './documents.css'
 
 function dateBoundary(value: string, end = false) {
   if (!value) return undefined
-  const parsed = new Date(`${value}T${end ? '23:59:59.999' : '00:00:00.000'}Z`)
-  return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : undefined
+  const date = new Date(`${value}T${end ? '23:59:59.999' : '00:00:00.000'}Z`)
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value
+    ? date.toISOString()
+    : 'invalid'
+}
+function pageNumber(value: string | null, fallback: number) {
+  return value === null ? fallback : /^\d+$/.test(value) ? Number(value) : NaN
 }
 
-function positivePage(value: string | null, fallback: number) {
-  const number = Number(value)
-  return Number.isSafeInteger(number) && number > 0 ? number : fallback
-}
-
-export function ApiDocuments({ kind }: { kind: DocumentKind }) {
+export function ApiDocuments({
+  kind,
+  reconciliation = false,
+}: {
+  kind: DocumentKind
+  reconciliation?: boolean
+}) {
   const [search, setSearch] = useSearchParams()
   const title = kind === 'invoice' ? 'Invoice' : 'Credit-note'
-  const pluralPath = kind === 'invoice' ? '/invoices' : '/credit-notes'
+  const pluralPath = reconciliation
+    ? '/reconciliation'
+    : kind === 'invoice'
+      ? '/invoices'
+      : '/credit-notes'
   const id = search.get('id')?.trim() ?? ''
   const [lookup, setLookup] = useState('')
   const [draftSearch, setDraftSearch] = useState(search.get('search') ?? '')
@@ -37,13 +70,20 @@ export function ApiDocuments({ kind }: { kind: DocumentKind }) {
   const registerParams = new URLSearchParams(search)
   registerParams.delete('id')
   const registerPath = `${pluralPath}${registerParams.size ? `?${registerParams}` : ''}`
-  const page = positivePage(search.get('page'), 1)
-  const pageSize = positivePage(search.get('pageSize'), 25)
+  const page = pageNumber(search.get('page'), 1)
+  const pageSize = pageNumber(search.get('pageSize'), 25)
   const params: DocumentQuery = {
     page,
     pageSize,
     ...(search.get('search') ? { search: search.get('search')! } : {}),
     ...(search.get('status') ? { status: search.get('status')! } : {}),
+    ...(search.get('reconciliationStatus')
+      ? {
+          reconciliationStatus: search.get('reconciliationStatus') as NonNullable<
+            DocumentQuery['reconciliationStatus']
+          >,
+        }
+      : {}),
     ...(search.get('customerId') ? { customerId: search.get('customerId')! } : {}),
     ...(search.get('sortBy') ? { sortBy: search.get('sortBy')! } : {}),
     ...(search.get('sortOrder') ? { sortOrder: search.get('sortOrder') as 'A' | 'D' } : {}),
@@ -51,18 +91,46 @@ export function ApiDocuments({ kind }: { kind: DocumentKind }) {
     dateTo: dateBoundary(search.get('to') ?? '', true),
   }
   const validation = documentQuerySchema.safeParse(params)
-  const path = id
-    ? documentDetailPath(kind, id)
-    : validation.success
-      ? documentListPath(kind, validation.data)
-      : null
-  const query = useQuery({
+  const validId = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
+  const path = validation.success ? documentListPath(kind, validation.data) : null
+  const list = useQuery({
     queryKey: ['dashboard-documents', kind, path],
-    queryFn: ({ signal }) => getJson(path!, undocumentedDocumentResponseSchema, signal),
-    enabled: apiMode === 'api' && path !== null,
+    queryFn: async ({ signal }) => {
+      const data = await getJson(path!, documentPageSchema, signal)
+      if (
+        data.page !== page ||
+        data.pageSize !== pageSize ||
+        data.items.length > pageSize ||
+        (data.total !== null && data.items.length > data.total)
+      )
+        throw new Error('The document pagination does not match the requested page.')
+      return data
+    },
+    enabled: apiMode === 'api' && !id && path !== null,
     retry: false,
     refetchInterval: false,
   })
+  const detail = useQuery({
+    queryKey: ['dashboard-document-detail', kind, id],
+    queryFn: async ({ signal }) => {
+      const data = await getJson(documentDetailPath(kind, id), documentDetailSchema, signal)
+      if (data.documentType !== kind)
+        throw new Error('The returned document type does not match the selected register.')
+      const sourceId = kind === 'invoice' ? data.document.invoice_id : data.document.creditnote_id
+      if (data.zohoDocumentId !== id || (sourceId != null && sourceId !== id))
+        throw new Error('The returned document ID does not match the selected document.')
+      return data
+    },
+    enabled: apiMode === 'api' && !!id && validId,
+    retry: false,
+    refetchInterval: false,
+  })
+  const query = id ? detail : list
+  const invalid = id ? !validId : !validation.success
+  const comparisonFilter = params.reconciliationStatus
+  const rows = (list.data?.items ?? [])
+    .map((document) => ({ document, comparison: resolveReceiptReconciliation(document) }))
+    .filter(({ comparison }) => !comparisonFilter || comparison.status === comparisonFilter)
 
   function update(values: Record<string, string>, resetPage = true) {
     setSearch((current) => {
@@ -82,12 +150,12 @@ export function ApiDocuments({ kind }: { kind: DocumentKind }) {
         <div>
           <span className="eyebrow">ZOHO BOOKS DOCUMENTS</span>
           <h1>
-            {title} {id ? 'detail' : 'register'}
+            {reconciliation ? 'CU/KRA Reconciliation' : `${title} ${id ? 'detail' : 'register'}`}
           </h1>
           <p>
             {id
-              ? 'Original document information and independent middleware fiscalization evidence.'
-              : 'The live Zoho register includes documents never submitted to middleware.'}
+              ? 'Source document, line items and persisted fiscalization information.'
+              : 'Review customer documents and their independent fiscalization records.'}
           </p>
         </div>
         {id ? (
@@ -100,16 +168,14 @@ export function ApiDocuments({ kind }: { kind: DocumentKind }) {
           </Link>
         )}
       </div>
-
       <div className="api-source-note document-scope-note">
         <FileText size={16} />
         <p>
-          {id ? `Zoho document ID: ${id}. ` : ''}
-          Zoho status, fiscalization, transmission and Zoho writeback are independent. A previous
-          request alone does not confirm a fiscal receipt.
+          {id ? `Zoho document ID: ${id}. ` : ''}Zoho status and middleware fiscalization are
+          independent. Missing information is shown as unavailable; a Zoho status does not confirm a
+          fiscal receipt.
         </p>
       </div>
-
       {!id && (
         <section
           className="panel api-panel document-controls"
@@ -122,133 +188,338 @@ export function ApiDocuments({ kind }: { kind: DocumentKind }) {
               update({ search: draftSearch })
             }}
           >
+            {reconciliation && (
+              <label>
+                Document type
+                <select value={kind} onChange={(event) => update({ kind: event.target.value })}>
+                  <option value="invoice">Invoices</option>
+                  <option value="credit_note">Credit notes</option>
+                </select>
+              </label>
+            )}
             <label className="document-search">
               Document number or customer search
-              <input value={draftSearch} onChange={(event) => setDraftSearch(event.target.value)} />
-            </label>
-            <button className="button secondary" type="submit">
-              <Search size={14} /> Search
-            </button>
-          </form>
-          <div className="document-filter-grid">
-            <label>
-              Customer ID
               <input
-                value={search.get('customerId') ?? ''}
-                onChange={(event) => update({ customerId: event.target.value })}
+                type="search"
+                placeholder="Search by number or customer"
+                maxLength={128}
+                value={draftSearch}
+                onChange={(event) => setDraftSearch(event.target.value)}
               />
             </label>
             <label>
               Zoho status
               <input
+                placeholder="Any status"
+                maxLength={128}
                 value={search.get('status') ?? ''}
                 onChange={(event) => update({ status: event.target.value })}
               />
             </label>
             <label>
-              Document date from (UTC)
-              <input
-                type="date"
-                value={search.get('from') ?? ''}
-                max={search.get('to') || undefined}
-                onChange={(event) => update({ from: event.target.value })}
-              />
-            </label>
-            <label>
-              Document date to (UTC)
-              <input
-                type="date"
-                value={search.get('to') ?? ''}
-                min={search.get('from') || undefined}
-                onChange={(event) => update({ to: event.target.value })}
-              />
-            </label>
-            <label>
-              Zoho sort field
-              <input
-                value={search.get('sortBy') ?? ''}
-                onChange={(event) => update({ sortBy: event.target.value })}
-              />
-            </label>
-            <label>
-              Sort order
+              CU/KRA reconciliation (current page)
               <select
-                value={search.get('sortOrder') ?? ''}
-                onChange={(event) => update({ sortOrder: event.target.value })}
+                value={search.get('reconciliationStatus') ?? ''}
+                onChange={(event) => update({ reconciliationStatus: event.target.value }, false)}
               >
-                <option value="">Upstream default</option>
-                <option value="A">Ascending</option>
-                <option value="D">Descending</option>
-              </select>
-            </label>
-            <label>
-              Page size
-              <select
-                value={pageSize}
-                onChange={(event) => update({ pageSize: event.target.value })}
-              >
-                {[25, 50, 100, 200].map((size) => (
-                  <option key={size} value={size}>
-                    {size}
+                <option value="">All reconciliation statuses</option>
+                {receiptReconciliationStatuses.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
                   </option>
                 ))}
               </select>
             </label>
-          </div>
+            <button className="button secondary" type="submit">
+              <Search size={14} /> Search
+            </button>
+            <button className="button secondary" type="button" onClick={() => setSearch({})}>
+              Clear filters
+            </button>
+          </form>
           <p className="api-note">
-            Zoho status and sort-field values are validated by middleware. Their supported values
-            are not enumerated in the supplied contract.
+            CU/KRA reconciliation filters only the loaded page. Search, source filters and page
+            navigation continue to use the complete document register; totals are source totals.
           </p>
-          <p className="api-note">
-            Middleware fiscalization and transmission filters belong in fiscalization history. Zoho
-            cannot apply them to its register; this screen does not filter only the current page.
-          </p>
-          <button className="button secondary" type="button" onClick={() => setSearch({})}>
-            Clear filters
-          </button>
+          <details className="document-advanced">
+            <summary>Dates, customer and sorting</summary>
+            <div className="document-filter-grid">
+              <label>
+                Customer ID
+                <input
+                  maxLength={128}
+                  value={search.get('customerId') ?? ''}
+                  onChange={(event) => update({ customerId: event.target.value })}
+                />
+              </label>
+              <label>
+                Document date from (UTC)
+                <input
+                  type="date"
+                  value={search.get('from') ?? ''}
+                  max={search.get('to') || undefined}
+                  onChange={(event) => update({ from: event.target.value })}
+                />
+              </label>
+              <label>
+                Document date to (UTC)
+                <input
+                  type="date"
+                  value={search.get('to') ?? ''}
+                  min={search.get('from') || undefined}
+                  onChange={(event) => update({ to: event.target.value })}
+                />
+              </label>
+              <label>
+                Zoho sort field
+                <input
+                  maxLength={128}
+                  value={search.get('sortBy') ?? ''}
+                  onChange={(event) => update({ sortBy: event.target.value })}
+                />
+              </label>
+              <label>
+                Sort order
+                <select
+                  value={search.get('sortOrder') ?? ''}
+                  onChange={(event) => update({ sortOrder: event.target.value })}
+                >
+                  <option value="">Source default</option>
+                  <option value="A">Ascending</option>
+                  <option value="D">Descending</option>
+                </select>
+              </label>
+            </div>
+            <p className="api-note">
+              Status and sort values are validated by the source. Fiscalization filters are
+              available in fiscalization history.
+            </p>
+          </details>
         </section>
       )}
 
-      {id && (
-        <div className="api-source-note document-scope-note">
-          Original Zoho document, line items, custom fields, fiscal receipt, associated requests and
-          writeback information remain unavailable until their exact response structure is
-          documented.
-        </div>
-      )}
-
       <section
-        className="panel api-panel"
+        className="panel api-panel document-results"
         aria-label={`${title} ${id ? 'detail data' : 'register data'}`}
+        aria-busy={query.isFetching}
       >
-        <div className="api-availability" role={query.error ? 'alert' : 'status'}>
-          <AlertCircle size={22} />
-          <strong>
-            {query.isFetching ? 'Loading document information' : 'Document data unavailable'}
-          </strong>
-          <span>
-            {!validation.success && !id
-              ? 'The filters are invalid. Check the date range, page size and sort order.'
-              : query.error instanceof Error
-                ? query.error.message
+        {invalid || apiMode !== 'api' || query.isPending || query.isError ? (
+          <div className="api-availability" role={query.isError || invalid ? 'alert' : 'status'}>
+            <AlertCircle size={22} />
+            <strong>
+              {query.isFetching ? 'Loading document information' : 'Document data unavailable'}
+            </strong>
+            <span>
+              {invalid
+                ? 'Check the document ID, date range, page size and filters.'
                 : apiMode !== 'api'
-                  ? 'Live document data requires the authenticated dashboard gateway. No sample documents are substituted.'
-                  : 'The supplied middleware contract names these endpoints but omits the exact document response schemas. No document data is inferred.'}
-          </span>
-          {!query.isFetching && apiMode === 'api' && path && (
-            <button className="button secondary" type="button" onClick={() => void query.refetch()}>
-              <RefreshCw size={14} /> Try again
-            </button>
-          )}
-        </div>
-        {!id && (
-          <p className="api-note">
-            Total unavailable from Zoho Books. Pagination requires the middleware hasMore response;
-            no page count or zero-result claim can be made while data is unavailable.
-          </p>
-        )}
+                  ? 'Live documents require the authenticated dashboard connection. Sample documents are not substituted.'
+                  : query.error instanceof Error
+                    ? query.error.message
+                    : 'Retrieving document information…'}
+            </span>
+            {!query.isFetching && !invalid && apiMode === 'api' && (
+              <button
+                className="button secondary"
+                type="button"
+                onClick={() => void query.refetch()}
+              >
+                <RefreshCw size={14} /> Try again
+              </button>
+            )}
+          </div>
+        ) : id && detail.data ? (
+          <DocumentDetailView data={detail.data} kind={kind} />
+        ) : !id && list.data ? (
+          <>
+            <div className="document-register-toolbar">
+              <strong>
+                {comparisonFilter
+                  ? `${rows.length} of ${list.data.items.length} documents on this page match the reconciliation filter`
+                  : `${list.data.items.length} documents on this page`}
+              </strong>
+              <button
+                className="button secondary"
+                disabled={list.isFetching}
+                onClick={() => void list.refetch()}
+              >
+                <RefreshCw size={14} /> Refresh
+              </button>
+            </div>
+            {rows.length === 0 ? (
+              <div className="api-availability" role="status">
+                <FileText size={24} />
+                <strong>
+                  {list.data.items.length > 0
+                    ? 'No documents on this page match the reconciliation filter'
+                    : 'No documents found'}
+                </strong>
+                <span>
+                  {list.data.items.length > 0
+                    ? 'Choose another reconciliation status or navigate to another source page.'
+                    : page > 1
+                      ? 'There are no documents on this page. Return to the previous page or adjust your filters.'
+                      : 'Try another number, customer, status or date range.'}
+                </span>
+              </div>
+            ) : (
+              <div
+                className="document-table-scroll"
+                tabIndex={0}
+                role="region"
+                aria-label={`${title} table`}
+              >
+                <table className="document-table">
+                  <caption className="sr-only">
+                    {title} register. Amounts use the source currency. Unavailable fields appear as
+                    a dash.
+                  </caption>
+                  <thead>
+                    <tr>
+                      <th scope="col">{title} number</th>
+                      <th scope="col">Customer</th>
+                      <th scope="col">Date</th>
+                      {kind === 'invoice' && <th scope="col">Due date</th>}
+                      <th scope="col">Currency</th>
+                      <th scope="col" className="document-numeric">
+                        Total
+                      </th>
+                      {kind === 'invoice' && (
+                        <th scope="col" className="document-numeric">
+                          Balance
+                        </th>
+                      )}
+                      <th scope="col">Zoho status</th>
+                      {kind === 'credit_note' && <th scope="col">Related invoice</th>}
+                      <th scope="col">Fiscalization</th>
+                      <th scope="col">CU receipt</th>
+                      <th scope="col">CU/KRA reconciliation</th>
+                      {reconciliation && <th scope="col">KRA invoice number</th>}
+                      {reconciliation && <th scope="col">Verification URL</th>}
+                      <th scope="col">Fiscalized at</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {rows.map(({ document: row, comparison }, index) => {
+                      const rowId = zohoId(row, kind)
+                      const target = new URLSearchParams(search)
+                      if (rowId) target.set('id', rowId)
+                      return (
+                        <tr key={`${rowId ?? 'missing'}-${index}`}>
+                          <td>
+                            {rowId ? (
+                              <Link className="document-number" to={`${pluralPath}?${target}`}>
+                                {documentNumber(row, kind) || rowId}
+                              </Link>
+                            ) : (
+                              <span title="The source did not provide a supported document ID">
+                                {documentNumber(row, kind) || 'Unavailable'}
+                              </span>
+                            )}
+                          </td>
+                          <td>{row.customer_name || '—'}</td>
+                          <td>{documentDate(row.date)}</td>
+                          {kind === 'invoice' && <td>{documentDate(row.due_date)}</td>}
+                          <td>{row.currency_code || '—'}</td>
+                          <td className="document-numeric">{documentAmount(row.total)}</td>
+                          {kind === 'invoice' && (
+                            <td className="document-numeric">{documentAmount(row.balance)}</td>
+                          )}
+                          <td>
+                            <DocumentStatus value={row.status} source="zoho" />
+                          </td>
+                          {kind === 'credit_note' && (
+                            <td>
+                              <RelatedInvoice document={row} />
+                            </td>
+                          )}
+                          <td>
+                            <FiscalizationStatus summary={row.fiscalizationRequest} />
+                          </td>
+                          <td className="document-mono">{comparison.cuReceiptNumber ?? '—'}</td>
+                          <td>
+                            <details className="document-reconciliation">
+                              <summary>
+                                <ReconciliationBadge value={comparison} />
+                                <span className="document-line-description">View comparison</span>
+                              </summary>
+                              <ReceiptReconciliation value={comparison} compact />
+                            </details>
+                          </td>
+                          {reconciliation && (
+                            <td className="document-mono">
+                              {comparison.invoiceNo ?? 'Unavailable'}
+                            </td>
+                          )}
+                          {reconciliation && (
+                            <td>
+                              {safeVerificationUrl(comparison.kraUrl) ? (
+                                <a
+                                  className="document-number"
+                                  href={safeVerificationUrl(comparison.kraUrl)!}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  referrerPolicy="no-referrer"
+                                >
+                                  Open KRA verification
+                                </a>
+                              ) : (
+                                'Unavailable'
+                              )}
+                            </td>
+                          )}
+                          <td>{documentDate(row.fiscalizationRequest?.fiscalizedAt, true)}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            <div className="document-pagination">
+              <span>
+                {list.data.total === null
+                  ? 'Total unavailable from Zoho Books'
+                  : `${list.data.total.toLocaleString('en-KE')} documents`}{' '}
+                · Page {list.data.page}
+              </span>
+              <label>
+                Rows per page
+                <select
+                  value={pageSize}
+                  onChange={(event) => update({ pageSize: event.target.value })}
+                >
+                  {[...new Set([25, 50, 100, 200, pageSize])]
+                    .sort((a, b) => a - b)
+                    .map((size) => (
+                      <option key={size} value={size}>
+                        {size}
+                      </option>
+                    ))}
+                </select>
+              </label>
+              <div className="document-page-buttons">
+                <button
+                  className="button secondary"
+                  aria-label="Previous page"
+                  disabled={page <= 1 || list.isFetching}
+                  onClick={() => update({ page: String(page - 1) }, false)}
+                >
+                  <ChevronLeft size={14} /> Previous
+                </button>
+                <button
+                  className="button secondary"
+                  aria-label="Next page"
+                  disabled={!list.data.hasMore || list.isFetching}
+                  onClick={() => update({ page: String(page + 1) }, false)}
+                >
+                  Next <ChevronRight size={14} />
+                </button>
+              </div>
+            </div>
+          </>
+        ) : null}
       </section>
-
       {!id && (
         <form
           className="panel document-lookup"
@@ -259,7 +530,12 @@ export function ApiDocuments({ kind }: { kind: DocumentKind }) {
         >
           <label>
             Open by Zoho document ID
-            <input required value={lookup} onChange={(event) => setLookup(event.target.value)} />
+            <input
+              required
+              maxLength={128}
+              value={lookup}
+              onChange={(event) => setLookup(event.target.value)}
+            />
           </label>
           <button className="button secondary" type="submit">
             Open document
@@ -267,5 +543,27 @@ export function ApiDocuments({ kind }: { kind: DocumentKind }) {
         </form>
       )}
     </>
+  )
+}
+
+export function ApiReceiptReconciliation() {
+  const [search] = useSearchParams()
+  return (
+    <ApiDocuments
+      kind={search.get('kind') === 'credit_note' ? 'credit_note' : 'invoice'}
+      reconciliation
+    />
+  )
+}
+
+export function FiscalizationStatus({
+  summary,
+}: {
+  summary: ProvisionalFiscalization | null | undefined
+}) {
+  return summary === null ? (
+    <span className="badge neutral">Not processed</span>
+  ) : (
+    <DocumentStatus value={summary?.status} source="fiscal" />
   )
 }

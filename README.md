@@ -1,22 +1,25 @@
 # ZohoAmarco Monitoring Dashboard
 
-The operational extension adds invoice/credit-note register entry points,
-combined request history, independent writeback operations, monitoring routes and
-passive system health. See the [implementation report](docs/IMPLEMENTATION-REPORT.md)
-for the audit, complete static gateway mapping, current test results and limitations.
-[Middleware dependencies](docs/MIDDLEWARE-DEPENDENCIES.md) identify what still
-prevents complete document registers, recovery actions and operational feeds.
+The dashboard-data BFF retains overview, invoice history, credit-note history and
+services. Four additional document GET mappings now support invoice and credit-note
+registers/details using confirmed envelopes and isolated provisional nested bindings.
+Actual field compatibility and authenticated live access remain unverified. The
+[document integration status](docs/DOCUMENT-API-INTEGRATION.md) lists the exact
+fields requiring confirmation. The existing interface is retained;
+other unsupported data families show unavailable errors without contacting upstream.
+See the [secure BFF report](docs/SECURE-BFF-REPORT.md) for the local audit, current
+scope, verification results and remaining gateway dependencies. Earlier operational
+implementation reports describe a broader middleware contract, not verified public
+gateway availability.
 
-ZohoAmarco Monitoring Dashboard is a read-only web application for monitoring invoice and credit-note fiscalization operations, receipt evidence, Zoho writeback state, reconciliation coverage, device diagnostics, and service health. It uses protected same-origin server functions to reach the authenticated middleware gateway.
+ZohoAmarco Monitoring Dashboard is a web application for monitoring invoice and credit-note fiscalization operations, receipt evidence, Zoho writeback state, reconciliation coverage, device diagnostics, and service health. It uses protected same-origin server functions to reach the authenticated middleware gateway. It also supports administrator-confirmed G03 receipt cancellation through the [trusted identity relay](docs/G03-INTEGRATION.md).
 
-Operational POST handlers validate the three documented middleware actions, but
-remain unavailable until the distinct middleware Better Auth operator-session
-integration is documented. The GET service bearer is never substituted for that
-session. The dashboard contains no fiscalization, device-command or tax logic.
+No fiscalization or writeback action handlers are exposed. The dashboard contains
+no fiscalization, device-command or tax logic.
 
 ## Current data availability
 
-Dashboard reads require the public gateway URL and a dedicated server-held service credential. Missing settings return `503 UPSTREAM_UNCONFIGURED`. Gateway/middleware changes and desktop verification are required before a separately authorized production deployment. The application does not invent live records or silently fall back to demo fixtures.
+Dashboard reads require the public gateway URL and a dedicated server-held service credential. Missing settings return `503 UPSTREAM_UNCONFIGURED`. The separately supplied server investigation confirms the four GET paths and bearer flow to middleware at `127.0.0.1:3001`. Actual response DTO compatibility and reachability from Vercel remain unverified. The invoice and credit-note endpoints contain persisted fiscalization history, not complete Zoho Books registers. The application does not invent live records or silently fall back to demo fixtures.
 
 Local development defaults to explicitly labeled `DEMO` fixtures. Demo identities and data are development-only and do not represent live accounting or fiscalization information.
 
@@ -24,7 +27,7 @@ Local development defaults to explicitly labeled `DEMO` fixtures. Demo identitie
 
 - **Overview:** request counts, status summaries, writeback rate, recent activity and charts when the selected source supplies those aggregates. Unsupported metrics are shown as unavailable.
 - **Requests:** persisted invoice and credit-note history, search/status/date/transmission/reconciliation/writeback filters, pagination, linked detail, chronological attempts and independent writeback state. This is not a complete Zoho document register.
-- **Document registers:** supported search/date/customer/status/sort controls and Zoho-ID lookup; live rows/details remain unavailable because the supplied contract omits exact response DTOs. Never-submitted document coverage is not claimed complete.
+- **Document registers:** responsive invoice and credit-note tables, search/status/date filters, pagination and linked document details. Nested field bindings are provisional; no live compatibility is claimed. History remains separate from the Zoho registers.
 - **System health:** documented middleware services endpoint supplies process uptime, dependency observations and optional telemetry. Unknown/unverified dependencies retain those states; worker activity is not queue depth.
 - **Fiscalization:** invoice and credit-note lists, bounded search, date/status filters, page navigation, sorting within the loaded page, CSV export, and detail views for status, attempts, receipt/CU evidence, fiscal QR and writeback information when supplied.
 - **Writeback:** documented persisted operation collection with server filtering/pagination and independent retry/provider-exchange counts, timestamps and request links.
@@ -73,9 +76,8 @@ api/
   dashboard/services.ts Dashboard service status GET API
   dashboard/requests.ts Persisted request history GET API
   dashboard/request.ts  Request detail GET API with strict id query
-  dashboard/writebacks.ts Persisted independent writeback operations GET API
-  dashboard/documents/  Live document read handlers (response DTOs pending)
-  dashboard/actions/    Strict action handlers (operator-session integration pending)
+  dashboard/writebacks.ts Protected unavailable response; no upstream request
+  dashboard/documents/  Document GETs; nested response bindings provisional
   dashboard/health.ts   Legacy unavailable response; health uses services
   dashboard/telemetry.ts Legacy unavailable response; telemetry uses services
 src/
@@ -133,7 +135,7 @@ Copy `.env.example` to `.env.local` for local use. All `VITE_` variables are com
 | `VITE_AUTH_MODE`              | No                      | Public, not secret                  | `development-mock` enables a local demo identity only in Vite development. Do not set on Vercel. | Local only                             |
 | `VITE_REFRESH_INTERVAL_MS`    | No                      | Public, not secret                  | Refresh interval in milliseconds, minimum 10000; default `30000`.                                | Local, Preview, Production             |
 | `DASHBOARD_UPSTREAM_BASE_URL` | Yes for dashboard reads | Server-only, usually not secret     | `https://g11server.tailaff2e5.ts.net`; exact HTTPS gateway origin.                               | Authorized deployment only             |
-| `DASHBOARD_UPSTREAM_TOKEN`    | Yes for dashboard reads | Server-only secret                  | Dedicated dashboard service Bearer credential shared with the gateway/middleware.                | Authorized deployment only             |
+| `DASHBOARD_UPSTREAM_TOKEN`    | Yes for dashboard reads | Server-only secret                  | Same value as middleware `DASHBOARD_SERVICE_BEARER_TOKEN`; existing dashboard variable name.     | Authorized deployment only             |
 | `DASHBOARD_AUTH_URL`          | Yes for hosted login    | Server-only, not secret             | Exact HTTPS origin, e.g. `https://dashboard.example.com`; no path.                               | Each enabled Preview/Production origin |
 | `DASHBOARD_SESSION_SECRET`    | Yes for hosted login    | Server-only secret                  | Random signing secret of at least 32 bytes. Generate with the command below.                     | Unique per environment                 |
 | `GOOGLE_CLIENT_ID`            | Yes for hosted login    | Server-only identifier              | Google OAuth Web client ID.                                                                      | Each enabled environment               |
@@ -156,7 +158,7 @@ Hosted authentication uses Google OpenID Connect and is separate from Zoho OAuth
 https://<dashboard-origin>/api/auth/callback
 ```
 
-Set the corresponding exact origin (without a path) in `DASHBOARD_AUTH_URL`. Google Cloud also needs the appropriate consent-screen configuration and authorized domain. Add only approved users to `DASHBOARD_ALLOWED_USERS`; supported roles are `admin`, `operator`, and `viewer`. All roles are read-only and currently share dashboard read access.
+Set the corresponding exact origin (without a path) in `DASHBOARD_AUTH_URL`. Google Cloud also needs the appropriate consent-screen configuration and authorized domain. Add only approved users to `DASHBOARD_ALLOWED_USERS`; supported roles are `admin`, `operator`, and `viewer`. All roles share dashboard read access. G03 cancellation is restricted to verified administrators using the [server-side identity relay](docs/G03-INTEGRATION.md).
 
 The flow validates OAuth state, nonce, PKCE, Google token signature and claims, verified email, and the allowlist. The server issues an eight-hour signed `HttpOnly`, `Secure`, `SameSite=Lax` host-only cookie. Logout is same-origin POST. Sessions are stateless; removing a user blocks their next API request, while individual session revocation is unavailable until expiry unless the signing secret is rotated. Login rate limiting is not implemented in the app; configure hosting-edge protection before broad public access.
 
@@ -177,7 +179,11 @@ All dashboard data routes are same-origin, authenticated, read-only `GET` endpoi
 | `GET /api/auth/session`           | Existing allowlisted session                                    |
 | `POST /api/auth/logout`           | Existing same-origin logout                                     |
 
-Only these four data resources are forwarded. Standalone manual-review is unavailable;
+These four existing resources retain their response contracts. Four additional
+document mappings use confirmed envelopes and narrow provisional nested projections;
+see the document integration status. The legacy local `requests`
+endpoint aliases the invoice collection with the same validation and authorization.
+Standalone manual-review is unavailable;
 other unsupported resources are rejected locally without fetch. Demo fixtures remain
 available in Vite mock mode.
 
@@ -185,9 +191,9 @@ Query limits and response schemas are enforced with Zod. Data routes return `400
 
 ## Middleware gateway integration
 
-The server forwards only overview, invoices, credit-notes and services GET resources to the configured HTTPS gateway. It requires a dedicated service credential, rejects redirects, bounds responses and validates JSON. The production hostname is allowed; no testing-only mode is required. Existing browser session handling is unchanged.
+The server retains overview, invoices, credit-notes and services GET integrations and four explicit document GET mappings. Document responses use confirmed envelopes and isolated provisional field projections; unknown provider fields are stripped. Nested field compatibility and authenticated gateway exposure remain unverified. It requires a dedicated service credential, rejects redirects and handles errors safely. Existing browser session handling is unchanged.
 
-Standalone manual-review requests are removed from live transport; unsupported resources are rejected before fetch. Schemas remain unchanged until actual responses demonstrate a mismatch. Use the opt-in desktop tests on port 3004 before a separately authorized deployment. See [current integration and test instructions](docs/API-INTEGRATION.md). The older contract audit is historical, not current production evidence.
+Standalone manual-review requests are removed from live transport; unsupported resources are rejected before fetch. Schemas remain unchanged until actual responses demonstrate a mismatch. The normal suite uses mocks and an automated browser-bundle isolation test. Legacy opt-in port-3004 tests are a separate test facility, not the verified production middleware on port 3001. See [current integration and test instructions](docs/API-INTEGRATION.md). The older contract audit is historical, not current production evidence.
 
 ## GitHub setup
 
@@ -242,7 +248,7 @@ See the CI workflow at `.github/workflows/`. These commands must pass in the tar
 
 ## Known limitations
 
-- Matching gateway/middleware source, authenticated GET support and desktop responses are required to finish end-to-end verification.
+- The supplied investigation verifies the four GET paths and bearer flow. Actual sanitized production responses and Vercel external reachability remain required for end-to-end verification.
 - Device serial number, physical health, last communication and history are not available from the audited source.
 - Service data does not establish gateway health or last successful gateway communication.
 - The source lacks complete writeback and reconciliation collections, a complete manual-review total, historical uptime, financial totals and processing-time trends. Any counts without complete coverage are marked partial or lower-bound where supported.

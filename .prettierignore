@@ -4,3 +4,4 @@ dist
 .pnpm-store
 .pnpm-local-profile
 pnpm-lock.yaml
+.browser-validation-*

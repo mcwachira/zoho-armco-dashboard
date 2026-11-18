@@ -86,6 +86,9 @@ describe('authenticated operational views', () => {
     const row = screen.getByText(note.documentNumber!).closest('tr')!
     expect(within(row).getByText('FISCALIZED')).toBeInTheDocument()
     expect(within(row).getByText('failed')).toBeInTheDocument()
+    expect(
+      within(row).getByRole('link', { name: `Open execution request ${note.requestId}` }),
+    ).toHaveAttribute('href', `/requests?kind=credit_note&id=${encodeURIComponent(note.requestId)}`)
     expect(screen.getByText(/Zoho documents never submitted are unavailable/)).toBeInTheDocument()
   }, 15_000)
 

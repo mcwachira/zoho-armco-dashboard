@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GatewayDependencies } from './dashboard-gateway'
 import { handleDashboardRequest } from './dashboard-gateway'
 import type { DashboardSession } from './auth'
-import { mockServiceHealth } from '../../src/features/api/mock-api-fixtures'
+import { mockOverview, mockServiceHealth } from '../../src/features/api/mock-api-fixtures'
 
 function responseMock() {
   const headers: Record<string, string> = {}
@@ -208,6 +208,41 @@ describe('read-only Vercel dashboard gateway', () => {
   const dateQuery =
     'createdFrom=2026-11-06T12%3A00%3A00.000Z&createdTo=2026-11-13T12%3A00%3A00.000Z'
   it.each([
+    ['matching UTC instants', '2026-11-06T12:00:00.000Z', '2026-11-13T12:00:00.000Z', 200],
+    [
+      'matching offset instants',
+      '2026-11-06T15:00:00.000+03:00',
+      '2026-11-13T15:00:00.000+03:00',
+      200,
+    ],
+    ['different start', '2026-11-05T12:00:00.000Z', '2026-11-13T12:00:00.000Z', 502],
+    ['different end', '2026-11-06T12:00:00.000Z', '2026-11-14T12:00:00.000Z', 502],
+  ] as const)(
+    'validates the overview response window: %s',
+    async (_label, returnedFrom, returnedTo, expectedStatus) => {
+      const payload = mockOverview(returnedFrom, returnedTo)
+      const fetch = vi.fn().mockResolvedValue(Response.json(payload))
+      const res = responseMock()
+      await handleDashboardRequest(
+        request('GET', `/api/dashboard/overview?${dateQuery}`),
+        res.response as never,
+        deps({
+          fetch,
+          env: {
+            DASHBOARD_UPSTREAM_BASE_URL: 'https://testing.example.test',
+            DASHBOARD_UPSTREAM_TOKEN: 'fixture-overview-service-token',
+          },
+        }),
+      )
+      expect(res.status()).toBe(expectedStatus)
+      if (expectedStatus === 200) expect(res.body()).toEqual(payload)
+      else {
+        expect(res.body()).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+        expect(res.body()).not.toHaveProperty('metrics')
+      }
+    },
+  )
+  it.each([
     [
       'overview',
       dateQuery,
@@ -388,5 +423,89 @@ describe('read-only Vercel dashboard gateway', () => {
       },
     })
     expect(JSON.stringify(res.body())).not.toContain('private diagnostic')
+  })
+})
+
+describe('observed public gateway error envelope', () => {
+  const gatewayRequestId = 'ec434641-778d-4d2f-94df-31a4350ad7c3'
+  const env = {
+    DASHBOARD_UPSTREAM_BASE_URL: 'https://gateway.example.test',
+    DASHBOARD_UPSTREAM_TOKEN: 'fixture-only-service-credential',
+  }
+
+  it.each([401, 404, 503])('retains request_id from HTTP %i safely', async (status) => {
+    const upstream = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: status === 401 ? 'Unauthorized' : 'Not found',
+          request_id: gatewayRequestId,
+          stack: 'private middleware stack trace',
+          authorization: env.DASHBOARD_UPSTREAM_TOKEN,
+        }),
+        { status },
+      ),
+    )
+    const res = responseMock()
+    await handleDashboardRequest(
+      request('GET', '/api/dashboard/services'),
+      res.response as never,
+      deps({ fetch: upstream, env }),
+    )
+    expect(res.status()).toBe(status === 401 ? 502 : status)
+    expect(res.body()).toMatchObject({
+      error: {
+        code: 'UPSTREAM_UNAVAILABLE',
+        requestId: gatewayRequestId,
+        upstreamStatus: status,
+      },
+    })
+    expect(res.headers['x-request-id']).toBe(gatewayRequestId)
+    const [, options] = upstream.mock.calls[0]!
+    expect(options.method).toBe('GET')
+    expect(options.headers.Authorization).toBe('Bearer fixture-only-service-credential')
+    const output = JSON.stringify({ body: res.body(), headers: res.headers })
+    expect(output).not.toContain('private middleware stack trace')
+    expect(output).not.toContain(env.DASHBOARD_UPSTREAM_TOKEN)
+    expect(output).not.toContain(env.DASHBOARD_UPSTREAM_BASE_URL)
+  })
+
+  it.each([
+    'invalid request id',
+    'injected\r\nheader',
+    'fixture-only-service-credential',
+    'gateway.example.test',
+  ])('rejects unsafe or protected request_id %#', async (requestId) => {
+    const upstream = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Unauthorized', request_id: requestId }), {
+        status: 401,
+      }),
+    )
+    const res = responseMock()
+    await handleDashboardRequest(
+      request('GET', '/api/dashboard/services'),
+      res.response as never,
+      deps({ fetch: upstream, env }),
+    )
+    expect(res.status()).toBe(502)
+    expect(res.headers['x-request-id']).toMatch(/^[a-f0-9-]{36}$/)
+    expect(res.headers['x-request-id']).not.toBe(requestId)
+    expect(JSON.stringify(res.body())).not.toContain(requestId)
+  })
+
+  it('keeps a safe upstream header ID ahead of the body alias', async () => {
+    const upstream = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Unauthorized', request_id: gatewayRequestId }), {
+        status: 401,
+        headers: { 'X-Request-ID': 'header-request-123' },
+      }),
+    )
+    const res = responseMock()
+    await handleDashboardRequest(
+      request('GET', '/api/dashboard/services'),
+      res.response as never,
+      deps({ fetch: upstream, env }),
+    )
+    expect(res.headers['x-request-id']).toBe('header-request-123')
+    expect(res.body()).toMatchObject({ error: { requestId: 'header-request-123' } })
   })
 })
