@@ -16,9 +16,11 @@ are recorded separately from local readiness evidence.
 The user confirmed `zoho-armco-dashboard.vercel.app` as the intended production
 target. Local application checks do not establish authenticated compatibility
 with the current gateway, deployed environment settings, or production readiness.
-Local type, lint, format, automated tests and production build checks pass. Full
-production signoff remains pending authenticated integration and hosted deployment
-verification. Final check results and release dependencies are recorded below.
+Local type, lint, format, automated tests and production build checks pass. The
+corrected application is deployed successfully, and the user confirmed normal
+signed-in Overview and Invoices views load live data. Remaining operational
+contract gaps are documented below; this is not a claim that every backend
+capability has been verified.
 
 The complete discovery inventory and every A–H acceptance item are in
 [the feature audit](DASHBOARD-FEATURE-AUDIT.md), under the dated mission section.
@@ -370,3 +372,35 @@ skips** across 30 passed files and one skipped file. An earlier run during
 concurrent heavy build/check activity timed out in the first Requests test and
 affected the following test; the complete standalone rerun passed. Repository
 lint, formatting and TypeScript/Vite build were rerun for the packaging fix.
+
+### Successful production deployment and acceptance
+
+Commit `f7bdfd5` was pushed to `main`. Vercel deployment
+`dpl_AaAaYLRgmsPEJZhWzuP8aRRVyjGi` is **READY**, with the expected
+`https://zoho-armco-dashboard.vercel.app` production alias. Structured output
+confirms exactly six Node.js 22 functions and the reviewed fixed resource
+rewrites. GitHub Actions run `44250321667` completed **successfully**, including
+clean installation and all CI checks.
+
+Read-only production checks after deployment confirmed:
+
+- `/` and `/overview`: 200 HTML with the new emitted `index-hLXDel1f.js` bundle.
+- Unsigned auth session, overview with valid ISO date filters, services,
+  capabilities, document lists/detail, manual review and current-receipt requests:
+  401 JSON, proving the handlers enforce session access instead of returning SPA
+  HTML. Capabilities previously returned a platform 404; its rewrite now works.
+- `/api/_dashboard/overview`: 404, confirming resource utility files are not
+  exposed as functions.
+- `/api/auth/login`: 302 to `accounts.google.com`; no provider login was automated.
+
+The user then signed in with their normal approved account and explicitly
+confirmed **Overview and Invoices load data**. This establishes user-observed
+live acceptance for those two views and confirms the overview no longer produces
+the reported `400 INVALID_QUERY` in that session. It does not establish all other
+operational endpoints, every field/provenance rule, every role or recovery action.
+
+Deployment is successful. Remaining release limitations are the exact missing
+operational schemas/permissions listed above, authenticated acceptance of other
+views and actions, and broader production device/reconciliation evidence. No
+fiscalization, writeback, cancellation, backend rules or protected environment
+values were changed during verification.

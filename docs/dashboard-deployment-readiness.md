@@ -159,3 +159,11 @@ fixed resource rewrites in addition to API/SPA separation.
 
 The final deployment outcome is recorded in the implementation report. A failed
 attempt is not evidence that the new source reached the production alias.
+
+Final outcome: commit `f7bdfd5` deployed successfully as
+`dpl_AaAaYLRgmsPEJZhWzuP8aRRVyjGi`, READY with the expected production alias
+and exactly six Node 22 functions. GitHub CI run `44250321667` passed. Public
+page, protected API, utility exclusion and Google redirect checks passed within
+their unsigned scope. The user signed in normally and confirmed Overview and
+Invoices load data. Remaining operational contract gaps are explicitly separate
+from deployment success in the implementation report.

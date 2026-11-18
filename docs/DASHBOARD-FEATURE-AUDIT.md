@@ -381,3 +381,13 @@ upstream routes, schema validation and unavailable responses remain unchanged.
 No bracketed dashboard route was reintroduced. The final packaging regression
 run passed 740 tests with 8 optional desktop skips, including selector injection,
 prototype-backed request headers and the existing overview date regressions.
+
+### Production acceptance update
+
+Deployment `dpl_AaAaYLRgmsPEJZhWzuP8aRRVyjGi`, source commit `f7bdfd5`,
+is READY on `https://zoho-armco-dashboard.vercel.app`. Clean GitHub CI passed.
+The user completed normal sign-in and confirmed Overview and Invoices load live
+data. The overview query issue is therefore covered by local regression tests
+and user-observed production acceptance. Other current backend contract gaps
+remain PARTIAL/MISSING as documented; a successful deployment does not fabricate
+those capabilities. The implementation report contains the full final evidence.
