@@ -12,6 +12,8 @@ import {
   mockCreditNoteDetails,
 } from './mock-api-fixtures'
 
+vi.mock('@/lib/auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'admin' } }) }))
+
 afterEach(() => {
   cleanup()
   vi.unstubAllEnvs()
@@ -43,6 +45,9 @@ async function mount(fetch: ReturnType<typeof vi.fn>, route = '/requests') {
 }
 function requestFetch(total = 1) {
   return vi.fn(async (path: string) => {
+    const writebackRequestId = path.match(/\/writebacks\/(?:invoices|credit-notes)\/([^?]+)/)?.[1]
+    if (writebackRequestId)
+      return json({ status: 'failed', requestId: decodeURIComponent(writebackRequestId) })
     if (path.includes('/invoice?')) return json(mockInvoiceDetails[mockInvoices[0].requestId])
     if (path.includes('/credit-note?'))
       return json(mockCreditNoteDetails[mockCreditNotes[1].requestId])
@@ -75,7 +80,9 @@ describe('documented fiscalization request history', () => {
     expect(fetch.mock.calls.every(([path]) => !path.startsWith('/api/dashboard/requests'))).toBe(
       true,
     )
-    expect(screen.getByText(/read bearer cannot authorize/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/writeback recovery is a separate authenticated action/),
+    ).toBeInTheDocument()
     expect(screen.getByText(/not the complete Zoho Books registers/)).toBeInTheDocument()
     expect(
       screen.getByText(/Documents never submitted to middleware are not included/),
@@ -272,7 +279,11 @@ describe('documented fiscalization request history', () => {
     const dialog = await screen.findByRole('dialog')
     expect(await within(dialog).findByText('poll attempt 2')).toBeInTheDocument()
     expect(within(dialog).getByText('READ_TIMEOUT')).toBeInTheDocument()
-    expect(within(dialog).getByText('Retry count').parentElement).toHaveTextContent('3')
+    expect(
+      within(dialog)
+        .getAllByText('Retry count')
+        .some((label) => label.parentElement?.textContent === 'Retry count3'),
+    ).toBe(true)
     expect(within(dialog).getByRole('link', { name: /Open persisted QR/ })).toHaveAttribute(
       'href',
       source.request.evidence!.qrVerificationUrl,

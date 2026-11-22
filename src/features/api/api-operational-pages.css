@@ -754,3 +754,37 @@
   outline: 2px solid #56c992;
   outline-offset: 3px;
 }
+.writeback-recovery {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+.writeback-recovery-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.writeback-recovery-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 16px;
+  margin: 12px 0;
+}
+.writeback-recovery-fields > div {
+  min-width: 0;
+}
+.writeback-recovery-fields dt {
+  color: var(--muted);
+  font-size: 10px;
+}
+.writeback-recovery-fields dd {
+  margin: 4px 0 0;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+}
+@media (max-width: 640px) {
+  .writeback-recovery-fields {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

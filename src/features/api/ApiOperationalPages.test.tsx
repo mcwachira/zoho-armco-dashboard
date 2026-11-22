@@ -6,6 +6,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 
+vi.mock('@/lib/auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'admin' } }) }))
+
 afterEach(() => {
   cleanup()
   vi.unstubAllEnvs()
@@ -275,7 +277,7 @@ describe('authenticated operational views', () => {
       '/invoices?id=zoho-42',
     )
     expect(
-      fetchSpy.mock.calls.some(([input]) => String(input).includes('/invoices/request-42')),
+      fetchSpy.mock.calls.some(([input]) => String(input).startsWith('/api/dashboard/invoices/')),
     ).toBe(false)
 
     queryClient.clear()

@@ -452,11 +452,9 @@ export function ApiRequests() {
         </>
       )}
       <div className="api-source-note request-scope-note">
-        Fiscalization retry and Retry Zoho Writeback require a middleware operator session. The
-        dashboard read bearer cannot authorize either action. The supplied contract does not define
-        how this dashboard establishes that session or the complete action response schemas;
-        operational actions remain unavailable until those integration details are supplied. Retry
-        eligibility stays with middleware.
+        Fiscalization submission and retry remain outside this dashboard. Request-specific Zoho
+        writeback recovery is a separate authenticated action that reuses the existing fiscalization
+        evidence; retry eligibility remains with middleware.
       </div>
       {id && validId && (
         <RecordDrawer selected={{ kind, id }} onClose={() => update({ id: undefined }, false)} />

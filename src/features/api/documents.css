@@ -321,6 +321,25 @@
   flex-wrap: wrap;
   margin-top: 20px;
 }
+.button.danger {
+  color: #fff;
+  background: #8f3037;
+  border: 1px solid #c44b55;
+}
+.button.danger:hover:not(:disabled) {
+  background: #a63a43;
+}
+.g03-cancellation-result {
+  display: block;
+  margin-top: 16px;
+  border-left: 3px solid var(--amber);
+}
+.g03-cancellation-result[role='status'] {
+  border-left-color: var(--green);
+}
+.g03-cancellation-result p {
+  margin: 8px 0;
+}
 .document-evidence {
   max-width: 100%;
   max-height: 400px;

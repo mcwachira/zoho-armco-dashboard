@@ -54,6 +54,7 @@ import type {
 } from './schemas'
 import { invoiceFiscalizationStatusSchema, creditNoteFiscalizationStateSchema } from './schemas'
 import { ApiOperationsHome, ApiWritebackOperations } from './ApiOperations'
+import { WritebackRecovery } from './WritebackRecovery'
 import { OverviewDateFilters, useOverviewDateRange } from './OverviewDateFilters'
 import './api-operational-pages.css'
 
@@ -1796,6 +1797,7 @@ function InvoiceDetail({
           label="Error category"
           value={request.writeback?.errorCategory ?? 'None persisted'}
         />
+        <WritebackRecovery kind="invoice" requestId={request.requestId} />
       </DetailSection>
       <DetailSection title="eTIMS reconciliation">
         <DetailLine label="Status" value={request.etims?.status ?? 'Not available'} />
@@ -1950,6 +1952,7 @@ function CreditNoteDetail({
           label="Error category"
           value={request.writeback?.errorCategory ?? 'None persisted'}
         />
+        <WritebackRecovery kind="credit-note" requestId={request.requestId} />
       </DetailSection>
       <DetailSection title="Persisted diagnostics">
         {request.diagnostics.length ? (
