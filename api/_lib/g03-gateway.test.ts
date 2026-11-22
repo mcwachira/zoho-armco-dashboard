@@ -188,7 +188,7 @@ describe('G03 proxy uses the existing signed dashboard session', () => {
     expect(result.upstream).not.toHaveBeenCalled()
   })
 
-  it.each(['admin', 'operator', 'viewer'] as const)(
+  it.each(['operator', 'viewer'] as const)(
     'rejects %s cancellation despite forged identity headers',
     async (role) => {
       const result = await invoke({
@@ -205,6 +205,26 @@ describe('G03 proxy uses the existing signed dashboard session', () => {
       expect(result.upstream).not.toHaveBeenCalled()
     },
   )
+
+  it('ignores forged browser identity and permissions on an authorized admin cancellation', async () => {
+    const result = await invoke({
+      cancel: true,
+      headers: {
+        authorization: 'Bearer browser-token',
+        'x-dashboard-user-id': ids[emails.viewer],
+        'x-dashboard-role': 'viewer',
+        'x-dashboard-permissions': 'none',
+      },
+    })
+    expect(result.status()).toBe(200)
+    const [, init] = vi.mocked(result.upstream).mock.calls[0]!
+    expect(init?.headers).toMatchObject({
+      Authorization: 'Bearer ' + credential,
+      'x-dashboard-user-id': ids[emails.admin],
+      'x-dashboard-role': 'administrator',
+    })
+    expect(JSON.stringify(init)).not.toContain('browser-token')
+  })
 
   it('supports short legitimate internal IDs without mistaking receipt digits for secrets', async () => {
     const result = await invoke({
@@ -261,20 +281,75 @@ describe('G03 proxy uses the existing signed dashboard session', () => {
   })
 })
 
-describe('G03 cancellation is disabled pending security review', () => {
+describe('G03 cancellation authorization and request validation', () => {
+  it.each(['operator', 'viewer'] as const)(
+    'rejects authenticated non-administrator %s before forwarding',
+    async (role) => {
+      const result = await invoke({ cancel: true, role })
+      expect(result.status()).toBe(403)
+      expect(result.body()).toMatchObject({ error: { code: 'FORBIDDEN' } })
+      expect(result.upstream).not.toHaveBeenCalled()
+    },
+  )
+
+  it('rejects missing and invalid sessions before forwarding cancellation', async () => {
+    for (const sessionCookie of ['', 'invalid', cookie('admin', Date.now() - 60_000)]) {
+      const result = await invoke({ cancel: true, sessionCookie })
+      expect(result.status()).toBe(401)
+      expect(result.upstream).not.toHaveBeenCalled()
+    }
+  })
+
+  it('forwards exactly one confirmed empty-body POST using server-derived identity', async () => {
+    const result = await invoke({ cancel: true })
+    expect(result.status()).toBe(200)
+    expect(result.body()).toEqual(cancellationFixture('cancelled_and_verified'))
+    expect(result.upstream).toHaveBeenCalledOnce()
+    expect(result.upstream).toHaveBeenCalledWith(
+      new URL('https://gateway.example.test/integrations/device/g03/cancel-receipt'),
+      expect.objectContaining({
+        method: 'POST',
+        body: '{}',
+        headers: {
+          Accept: 'application/json',
+          Authorization: 'Bearer ' + credential,
+          'Content-Type': 'application/json',
+          'x-dashboard-user-id': ids[emails.admin],
+          'x-dashboard-role': 'administrator',
+          'X-Request-ID': expect.any(String),
+        },
+      }),
+    )
+    expect(result.headers['x-request-id']).toBeTruthy()
+  })
+
   it.each([
     { body: '{}' },
     { headers: { origin: undefined } },
     { headers: { origin: 'https://attacker.invalid' } },
     { headers: { 'content-type': 'text/plain' } },
     { body: { role: 'administrator', userId: 'spoof' } },
-    { env: { DASHBOARD_UPSTREAM_TOKEN: undefined, DASHBOARD_USER_IDS: undefined } },
-  ])('blocks every authorized administrator cancellation before forwarding %#', async (options) => {
+    { headers: { 'sec-fetch-site': 'cross-site' } },
+  ])('rejects invalid origin, body or browser identity claims %#', async (options) => {
     const result = await invoke({ ...options, cancel: true })
-    expect(result.status()).toBe(403)
-    expect(result.body()).toMatchObject({ error: { code: 'G03_CANCELLATION_DISABLED' } })
+    expect(result.status()).toBe(400)
+    expect(result.body()).toMatchObject({ error: { code: 'INVALID_REQUEST' } })
     expect(result.upstream).not.toHaveBeenCalled()
     expect(result.headers['cache-control']).toBe('no-store')
+  })
+
+  it('fails closed when the service credential is missing', async () => {
+    const result = await invoke({ env: { DASHBOARD_UPSTREAM_TOKEN: undefined }, cancel: true })
+    expect(result.status()).toBe(503)
+    expect(result.body()).toMatchObject({ error: { code: 'UPSTREAM_UNCONFIGURED' } })
+    expect(result.upstream).not.toHaveBeenCalled()
+  })
+
+  it('fails closed when the trusted identity record is missing', async () => {
+    const result = await invoke({ env: { DASHBOARD_USER_IDS: undefined }, cancel: true })
+    expect(result.status()).toBe(503)
+    expect(result.body()).toMatchObject({ error: { code: 'DASHBOARD_IDENTITY_UNCONFIGURED' } })
+    expect(result.upstream).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -325,6 +400,22 @@ describe('G03 response and transport contract', () => {
     })
     expect(JSON.stringify(result.body())).not.toContain('private stack')
     expect(JSON.stringify(result.body())).not.toContain(credential)
+  })
+  it('preserves structured unsuccessful cancellation evidence and correlation IDs', async () => {
+    const result = await invoke({
+      cancel: true,
+      upstreamStatus: 409,
+      payload: cancellationFixture('cancellation_outcome_unknown'),
+      upstream: vi.fn().mockResolvedValue(
+        new Response(JSON.stringify(cancellationFixture('cancellation_outcome_unknown')), {
+          status: 409,
+          headers: { 'x-correlation-id': 'cancel-correlation-9' },
+        }),
+      ),
+    })
+    expect(result.status()).toBe(409)
+    expect(result.body()).toMatchObject({ status: 'cancellation_outcome_unknown', success: false })
+    expect(result.headers['x-request-id']).toBe('cancel-correlation-9')
   })
   it.each([credential, secret, baseEnv.GOOGLE_CLIENT_SECRET, baseEnv.DASHBOARD_UPSTREAM_BASE_URL])(
     'blocks protected values echoed inside valid DTO fields %#',

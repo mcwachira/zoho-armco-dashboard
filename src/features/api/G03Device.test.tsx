@@ -5,7 +5,13 @@ import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { closedReceipt, openReceipt, unknownReceipt } from './__fixtures__/g03-receipt-fixtures'
+import {
+  cancellationFixture,
+  closedReceipt,
+  openReceipt,
+  unknownReceipt,
+  verifiedCancellation,
+} from './__fixtures__/g03-receipt-fixtures'
 import type { ReceiptState } from './device-contracts'
 
 const identity = vi.hoisted(() => ({ role: 'admin' as string | undefined }))
@@ -34,7 +40,7 @@ function json(body: unknown, status = 200) {
 }
 async function mount(observation: ReceiptState = openReceipt, warning = false) {
   const read = vi.fn(async () => json(observation))
-  const post = vi.fn(async () => json({}))
+  const post = vi.fn(async () => json(verifiedCancellation))
   const fetcher = vi.fn(async (path: string, options?: RequestInit) => {
     if (path === '/api/device/g03/current-receipt' && options?.method === 'GET') return read()
     if (path === '/api/device/g03/cancel-receipt' && options?.method === 'POST') return post()
@@ -97,21 +103,77 @@ describe('G03 receipt monitoring with actual same-origin transport', () => {
     },
   )
 
-  it.each(['admin', 'operator', 'viewer', undefined])(
+  it.each(['operator', 'viewer', undefined])(
     'hides cancellation from %s while allowing reads',
     async (role) => {
       identity.role = role
       const { post } = await mount()
       expect(screen.queryByRole('button', { name: 'Cancel Open Receipt' })).not.toBeInTheDocument()
       expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
-      expect(
-        screen.getByText(
-          /cancellation is unavailable pending a separate authorization security review/,
-        ),
-      ).toBeInTheDocument()
+      expect(screen.getByText(/available only to administrators/)).toBeInTheDocument()
       expect(post).not.toHaveBeenCalled()
     },
   )
+
+  it('requires explicit administrator confirmation and reports verified cancellation', async () => {
+    const user = userEvent.setup()
+    const { post, read, fetcher } = await mount(openReceipt)
+    read.mockResolvedValueOnce(json(closedReceipt))
+    const trigger = screen.getByRole('button', { name: 'Cancel Open Receipt' })
+    expect(trigger).toBeEnabled()
+    await user.click(trigger)
+    expect(
+      screen.getByRole('alertdialog', { name: 'Cancel the open physical receipt?' }),
+    ).toBeInTheDocument()
+    expect(post).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Confirm cancellation' }))
+    expect(await screen.findByText('Cancellation verified')).toBeInTheDocument()
+    expect(post).toHaveBeenCalledOnce()
+    expect(read).toHaveBeenCalledTimes(2)
+    expect(fetcher).toHaveBeenCalledWith(
+      '/api/device/g03/cancel-receipt',
+      expect.objectContaining({ method: 'POST', body: '{}', credentials: 'same-origin' }),
+    )
+    expect(screen.getByRole('heading', { name: 'Receipt state: CLOSED' })).toBeInTheDocument()
+  })
+
+  it.each([closedReceipt, unknownReceipt])(
+    'does not allow cancellation when latest state is $state',
+    async (observation) => {
+      const { post } = await mount(observation)
+      expect(screen.queryByRole('button', { name: 'Cancel Open Receipt' })).not.toBeInTheDocument()
+      expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+      expect(post).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each([
+    'cancellation_rejected',
+    'receipt_still_open',
+    'verification_required',
+    'cancellation_outcome_unknown',
+  ] as const)('shows %s as unconfirmed without claiming success', async (status) => {
+    const user = userEvent.setup()
+    const { post } = await mount()
+    post.mockResolvedValueOnce(json(cancellationFixture(status), 409))
+    await user.click(screen.getByRole('button', { name: 'Cancel Open Receipt' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm cancellation' }))
+    const heading =
+      status === 'cancellation_outcome_unknown'
+        ? 'Cancellation outcome uncertain'
+        : 'Cancellation unsuccessful'
+    const result = (await screen.findByText(heading)).closest('[role="alert"]')
+    expect(result).toHaveTextContent(
+      status === 'cancellation_outcome_unknown'
+        ? 'The cancellation outcome is unknown.'
+        : status === 'receipt_still_open'
+          ? 'The verification read reports OPEN.'
+          : status === 'verification_required'
+            ? 'The receipt state could not be verified.'
+            : 'The device rejected cancellation.',
+    )
+    expect(result).not.toHaveTextContent('Cancellation verified')
+  })
 
   it('refreshes a CLOSED observation to OPEN', async () => {
     const { read } = await mount(closedReceipt)

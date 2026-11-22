@@ -1,10 +1,9 @@
 import { z } from 'zod'
 
-// Receipt reads remain available; cancellation is disabled pending security review.
 export const g03ReceiptIntegration = {
   monitoringAvailable: true,
-  cancellationAvailable: false,
-  reason: 'G03 cancellation is disabled pending a separate authorization security review.',
+  cancellationAvailable: true,
+  reason: null,
 } as const
 
 const text = z.string().max(20_000)

@@ -1,8 +1,18 @@
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { AlertTriangle, RefreshCw } from 'lucide-react'
-import { apiMode, getCurrentReceiptState } from '@/lib/api/client'
-import { g03ReceiptIntegration, receiptStateLabel, receiptStateSchema } from './device-contracts'
+import { AlertTriangle, RefreshCw, ShieldAlert } from 'lucide-react'
+import { useAuth } from '@/lib/auth/AuthProvider'
+import { apiMode, cancelCurrentReceipt, getCurrentReceiptState } from '@/lib/api/client'
+import {
+  cancellationDescription,
+  cancellationVerified,
+  cancelReceiptSchema,
+  g03ReceiptIntegration,
+  receiptStateLabel,
+  receiptStateSchema,
+  type CancelReceiptResult,
+} from './device-contracts'
 import { documentDate } from './document-provisional'
 import { ApiDevice } from './ApiOperationalPages'
 import './documents.css'
@@ -60,9 +70,60 @@ export function G03PreflightWarning() {
 }
 
 export function G03Device() {
-  const query = useReceiptState()
+  const { user } = useAuth()
+  const queryClient = useQueryClient()
+  const [confirming, setConfirming] = useState(false)
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelResult, setCancelResult] = useState<CancelReceiptResult | null>(null)
+  const [cancelError, setCancelError] = useState<string | null>(null)
+  const cancelGuard = useRef(false)
+  const dialogWasOpen = useRef(false)
+  const cancelTrigger = useRef<HTMLButtonElement>(null)
+  const confirmButton = useRef<HTMLButtonElement>(null)
+  const query = useReceiptState(!confirming && !cancelling)
   const state = g03ReceiptIntegration.monitoringAvailable && !query.isError ? query.data : undefined
   const receiptLabel = receiptStateLabel(state)
+  const isAdministrator = user?.role === 'admin'
+  const canCancel =
+    g03ReceiptIntegration.cancellationAvailable &&
+    isAdministrator &&
+    receiptLabel === 'OPEN' &&
+    !query.isFetching &&
+    !cancelling
+
+  useEffect(() => {
+    if (confirming) {
+      dialogWasOpen.current = true
+      confirmButton.current?.focus()
+    } else if (dialogWasOpen.current && !cancelling) {
+      dialogWasOpen.current = false
+      cancelTrigger.current?.focus()
+    }
+  }, [confirming, cancelling])
+
+  async function confirmCancellation() {
+    if (cancelGuard.current || !canCancel || !confirming) return
+    cancelGuard.current = true
+    setCancelling(true)
+    setCancelError(null)
+    setCancelResult(null)
+    try {
+      const result = await cancelCurrentReceipt(cancelReceiptSchema)
+      setCancelResult(result)
+    } catch (error) {
+      setCancelError(
+        error instanceof Error
+          ? error.message
+          : 'The cancellation outcome is uncertain. Refresh the physical receipt state.',
+      )
+    } finally {
+      // A timeout or rejection is not proof that the device stayed open.
+      await queryClient.refetchQueries({ queryKey: ['g03-receipt-state'], exact: true })
+      setCancelling(false)
+      setConfirming(false)
+      cancelGuard.current = false
+    }
+  }
 
   return (
     <>
@@ -74,7 +135,7 @@ export function G03Device() {
         </div>
         <button
           className="button secondary"
-          disabled={!g03ReceiptIntegration.monitoringAvailable || query.isFetching}
+          disabled={!g03ReceiptIntegration.monitoringAvailable || query.isFetching || cancelling}
           onClick={() => void query.refetch({ cancelRefetch: false })}
         >
           <RefreshCw size={14} /> Refresh state
@@ -156,11 +217,136 @@ export function G03Device() {
           Unavailable readings never mean the receipt is closed.
         </p>
         <p className="api-note">
-          G03 receipt cancellation is unavailable pending a separate authorization security review.
-          This dashboard does not send cancellation commands.
+          Cancellation is available only to administrators when the latest verified receipt state is
+          OPEN. UNKNOWN and CLOSED never enable the action.
         </p>
+        {apiMode === 'api' &&
+          isAdministrator &&
+          g03ReceiptIntegration.cancellationAvailable &&
+          receiptLabel === 'OPEN' && (
+            <button
+              ref={cancelTrigger}
+              className="button danger"
+              type="button"
+              disabled={!canCancel}
+              onClick={() => {
+                setCancelError(null)
+                setCancelResult(null)
+                setConfirming(true)
+              }}
+            >
+              <ShieldAlert size={15} /> Cancel Open Receipt
+            </button>
+          )}
+        {cancelling && <p role="status">Requesting cancellation and verifying receipt state…</p>}
+        {cancelError && (
+          <div className="api-source-note g03-warning" role="alert">
+            <AlertTriangle size={16} />
+            <p>{cancelError} The receipt state was refreshed after the request.</p>
+          </div>
+        )}
+        {cancelResult && <CancellationOutcome result={cancelResult} />}
       </section>
+      {confirming && (
+        <div className="g03-dialog-backdrop">
+          <section
+            className="panel g03-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="g03-cancel-title"
+            aria-describedby="g03-cancel-description"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && !cancelling) setConfirming(false)
+            }}
+          >
+            <h2 id="g03-cancel-title">Cancel the open physical receipt?</h2>
+            <p id="g03-cancel-description">
+              The middleware will read the current device state, send one cancellation command only
+              if it is still OPEN, then independently read the state again. The dashboard reports
+              success only after the command is acknowledged and CLOSED is verified. This does not
+              submit or fiscalize an invoice.
+            </p>
+            <div className="document-page-buttons">
+              <button
+                className="button secondary"
+                type="button"
+                disabled={cancelling}
+                onClick={() => setConfirming(false)}
+              >
+                Keep receipt open
+              </button>
+              <button
+                ref={confirmButton}
+                className="button danger"
+                type="button"
+                disabled={!canCancel || cancelling}
+                onClick={() => void confirmCancellation()}
+              >
+                {cancelling ? 'Cancelling…' : 'Confirm cancellation'}
+              </button>
+            </div>
+          </section>
+        </div>
+      )}
       <ApiDevice embedded />
     </>
+  )
+}
+
+function CancellationOutcome({ result }: { result: CancelReceiptResult }) {
+  const verified = cancellationVerified(result)
+  const alreadyClosed = result.status === 'no_open_receipt'
+  const role = verified || alreadyClosed ? 'status' : 'alert'
+  return (
+    <section className="api-source-note g03-cancellation-result" role={role}>
+      <strong>
+        {verified
+          ? 'Cancellation verified'
+          : alreadyClosed
+            ? 'Receipt was already closed'
+            : result.status === 'cancellation_outcome_unknown'
+              ? 'Cancellation outcome uncertain'
+              : 'Cancellation unsuccessful'}
+      </strong>
+      <p>{cancellationDescription(result)}</p>
+      <dl className="document-fields g03-fields">
+        <div>
+          <dt>Initial physical state</dt>
+          <dd>{receiptStateLabel(result.initialReceipt)}</dd>
+        </div>
+        <div>
+          <dt>Cancellation command</dt>
+          <dd>{result.cancellationCommand?.status ?? 'Not sent'}</dd>
+        </div>
+        <div>
+          <dt>Command result code</dt>
+          <dd>{result.cancellationCommand?.resultCode ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>Independent verification</dt>
+          <dd>{result.verification ? receiptStateLabel(result.verification) : 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>Requested at</dt>
+          <dd>{documentDate(result.requestedAt, true)}</dd>
+        </div>
+        {result.cancellationCommand?.error && (
+          <div>
+            <dt>Command error</dt>
+            <dd>
+              {result.cancellationCommand.error.code}: {result.cancellationCommand.error.message}
+            </dd>
+          </div>
+        )}
+        {result.verification?.error && (
+          <div>
+            <dt>Verification error</dt>
+            <dd>
+              {result.verification.error.code}: {result.verification.error.message}
+            </dd>
+          </div>
+        )}
+      </dl>
+    </section>
   )
 }
