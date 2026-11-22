@@ -98,6 +98,51 @@ describe('same-origin dashboard API client safety boundary', () => {
     )
   })
 
+  it('sends the G03 cancellation only to its same-origin dashboard function', async () => {
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const payload = {
+      success: false,
+      status: 'cancellation_outcome_unknown',
+      requestedAt: '2026-11-17T03:00:00.000Z',
+      initialReceipt: {
+        state: 'OPEN',
+        salesNumber: '00042',
+        vatSubtotals: { A: '10.00', B: '0', C: '0', D: '0', E: '0' },
+        checkedAt: '2026-11-17T03:00:00.000Z',
+        device: { connectivity: 'connected', httpStatus: 200, resultCode: 0 },
+        error: null,
+      },
+      cancellationCommand: {
+        status: 'unknown',
+        resultCode: null,
+        error: { code: 'COMMAND_TIMEOUT', message: 'Outcome is uncertain.' },
+      },
+      verification: null,
+    }
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(payload), { status: 409 }))
+    vi.stubGlobal('fetch', fetchSpy)
+    const { cancelCurrentReceipt } = await import('./client')
+    const { cancelReceiptSchema } = await import('@/features/api/device-contracts')
+
+    await expect(cancelCurrentReceipt(cancelReceiptSchema)).resolves.toMatchObject({
+      status: 'cancellation_outcome_unknown',
+      success: false,
+    })
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/device/g03/cancel-receipt',
+      expect.objectContaining({
+        method: 'POST',
+        body: '{}',
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+      }),
+    )
+    expect(JSON.stringify(fetchSpy.mock.calls)).not.toContain('Authorization')
+    expect(JSON.stringify(fetchSpy.mock.calls)).not.toContain('Bearer')
+  })
+
   it('normalizes non-success HTTP responses without parsing their bodies', async () => {
     vi.stubEnv('VITE_DATA_MODE', 'api')
     vi.stubEnv('VITE_API_BASE_URL', 'https://middleware.example.test')
@@ -265,3 +310,43 @@ it.each([
     vi.unstubAllGlobals()
   }
 })
+
+it.each([
+  ['invoice', 'invoice-request-14', 'invoices'],
+  ['credit-note', 'credit-note-request-15', 'credit-notes'],
+] as const)(
+  '%s status and recovery use the request-scoped dashboard route',
+  async (kind, id, collection) => {
+    vi.resetModules()
+    vi.stubEnv('DEV', false)
+    vi.stubEnv('VITE_DATA_MODE', 'api')
+    const fetchSpy = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ status: 'failed', requestId: id }), {
+          headers: { 'Content-Type': 'application/json' },
+        }),
+    )
+    vi.stubGlobal('fetch', fetchSpy)
+    try {
+      const { getWritebackRecovery, retryWritebackRecovery } = await import('./client')
+      const schema = z.object({ status: z.string(), requestId: z.string() })
+      await getWritebackRecovery(kind, id, schema)
+      expect(fetchSpy).toHaveBeenLastCalledWith(
+        `/api/dashboard/writebacks/${collection}/${id}`,
+        expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+      )
+      await retryWritebackRecovery(kind, id, schema)
+      expect(fetchSpy).toHaveBeenLastCalledWith(
+        `/api/dashboard/writebacks/${collection}/${id}`,
+        expect.objectContaining({ method: 'POST', credentials: 'same-origin' }),
+      )
+      const [, options] = fetchSpy.mock.calls[1]!
+      expect(options.body).toBeUndefined()
+      expect(options.headers).toEqual({ Accept: 'application/json' })
+      expect(JSON.stringify(options)).not.toMatch(/authorization|bearer|operator/i)
+    } finally {
+      vi.unstubAllEnvs()
+      vi.unstubAllGlobals()
+    }
+  },
+)

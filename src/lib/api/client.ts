@@ -47,10 +47,54 @@ export async function getCurrentReceiptState<T>(
 ): Promise<T> {
   return dashboardJson('/api/device/g03/current-receipt', schema, signal)
 }
+/** The only browser-side device mutation; it targets the dashboard server function. */
+export async function cancelCurrentReceipt<T>(schema: ZodType<T>): Promise<T> {
+  return dashboardJson('/api/device/g03/cancel-receipt', schema, undefined, {
+    method: 'POST',
+    body: {},
+    timeoutMs: 25_000,
+    returnStructuredFailure: true,
+  })
+}
+export type WritebackDocumentType = 'invoice' | 'credit-note'
+function writebackRecoveryPath(kind: WritebackDocumentType, requestId: string): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(requestId))
+    throw new ApiError('The fiscalization request ID is invalid.', undefined, 'configuration')
+  const collection = kind === 'invoice' ? 'invoices' : 'credit-notes'
+  return `/api/dashboard/writebacks/${collection}/${encodeURIComponent(requestId)}`
+}
+export async function getWritebackRecovery<T>(
+  kind: WritebackDocumentType,
+  requestId: string,
+  schema: ZodType<T>,
+  signal?: AbortSignal,
+): Promise<T> {
+  return dashboardJson(writebackRecoveryPath(kind, requestId), schema, signal, {
+    method: 'GET',
+    timeoutMs: 10_000,
+  })
+}
+/** Manual recovery sends no payload and never retries a timed out submission. */
+export async function retryWritebackRecovery<T>(
+  kind: WritebackDocumentType,
+  requestId: string,
+  schema: ZodType<T>,
+): Promise<T> {
+  return dashboardJson(writebackRecoveryPath(kind, requestId), schema, undefined, {
+    method: 'POST',
+    timeoutMs: 25_000,
+  })
+}
 async function dashboardJson<T>(
   path: string,
   schema: ZodType<T>,
   signal?: AbortSignal,
+  request?: {
+    method: 'GET' | 'POST'
+    body?: unknown
+    timeoutMs?: number
+    returnStructuredFailure?: boolean
+  },
 ): Promise<T> {
   if (apiMode !== 'api')
     throw new ApiError(
@@ -67,10 +111,21 @@ async function dashboardJson<T>(
       'configuration',
     )
   const deviceRead = path === '/api/device/g03/current-receipt'
-  if (!path.startsWith('/api/dashboard/') && !deviceRead)
+  const deviceCancel = path === '/api/device/g03/cancel-receipt' && request?.method === 'POST'
+  const writebackPath =
+    /^\/api\/dashboard\/writebacks\/(?:invoices|credit-notes)\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(
+      path,
+    )
+  const writebackRequest =
+    writebackPath && (request?.method === 'GET' || request?.method === 'POST')
+      ? request.method
+      : undefined
+  if (!path.startsWith('/api/dashboard/') && !deviceRead && !deviceCancel)
     throw new ApiError('Only dashboard read routes are available.', undefined, 'configuration')
   if (
     !deviceRead &&
+    !deviceCancel &&
+    !writebackRequest &&
     !/^\/api\/dashboard\/(overview|invoices|invoice|credit-notes|credit-note|services|device|capabilities|writebacks|manual-review|manual-review-case|reconciliation|events|operations|documents\/(?:invoices|invoice|credit-notes|credit-note)|requests|request|writeback|health|telemetry)(\?|$)/.test(
       path,
     )
@@ -82,21 +137,32 @@ async function dashboardJson<T>(
     )
   if (signal?.aborted) throw new ApiError('Request was cancelled.', undefined, 'cancelled')
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), settings.timeoutMs)
+  const timeout = setTimeout(() => controller.abort(), request?.timeoutMs ?? settings.timeoutMs)
   const abortRequest = () => controller.abort()
   signal?.addEventListener('abort', abortRequest, { once: true })
   try {
     const response = await fetch(`${settings.baseUrl}${path}`, {
-      method: 'GET',
+      method: deviceCancel || writebackRequest === 'POST' ? 'POST' : 'GET',
       headers: {
         Accept: 'application/json',
+        ...(deviceCancel ? { 'Content-Type': 'application/json' } : {}),
       },
+      ...(deviceCancel ? { body: JSON.stringify(request.body ?? {}) } : {}),
       signal: controller.signal,
       credentials: 'same-origin',
       cache: 'no-store',
       redirect: 'error',
     })
     if (!response.ok) {
+      if (deviceCancel && request?.returnStructuredFailure) {
+        try {
+          const payload: unknown = await response.clone().json()
+          const parsed = schema.safeParse(payload)
+          if (parsed.success) return parsed.data
+        } catch {
+          // Fall through to the safe gateway error below.
+        }
+      }
       const kind =
         response.status === 401 ? 'unauthorized' : response.status === 403 ? 'forbidden' : 'http'
       if (response.status === 401 && typeof window !== 'undefined') {

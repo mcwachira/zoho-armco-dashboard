@@ -29,6 +29,8 @@ describe('production SPA fallback boundary', () => {
     '/api/dashboard/documents/invoice',
     '/api/device/g03/current-receipt',
     '/api/device/g03/cancel-receipt',
+    '/api/dashboard/writebacks/invoices/request-1',
+    '/api/dashboard/writebacks/credit-notes/request-2',
     '/api/unknown-resource',
   ])('never returns SPA HTML for an API request to %s', (pathname) => {
     expect(matches(pathname)).toBe(false)
@@ -43,7 +45,7 @@ it('packages at most twelve functions while retaining all fixed dashboard URLs',
       return entry.name.endsWith('.ts') ? [entry.name] : []
     })
   }
-  expect(functions(new URL('../', import.meta.url))).toHaveLength(6)
+  expect(functions(new URL('../', import.meta.url))).toHaveLength(8)
   for (const resource of [
     'overview',
     'invoices',

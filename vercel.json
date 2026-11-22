@@ -13,6 +13,9 @@
     },
     "api/dashboard.ts": {
       "maxDuration": 10
+    },
+    "api/dashboard/writebacks/**/*.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [

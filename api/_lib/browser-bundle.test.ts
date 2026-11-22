@@ -9,6 +9,7 @@ it('keeps server credentials and API modules out of the actual production browse
   const canaries = {
     DASHBOARD_UPSTREAM_BASE_URL: 'https://bundle-canary-gateway.example.invalid',
     DASHBOARD_UPSTREAM_TOKEN: 'bundle-canary-service-bearer-123456',
+    DASHBOARD_WRITEBACK_SERVICE_BEARER_TOKEN: 'bundle-canary-writeback-service-bearer-123456',
     DASHBOARD_SERVICE_BEARER_TOKEN: 'bundle-canary-middleware-bearer-123456',
     DASHBOARD_SESSION_SECRET: 'bundle-canary-session-signing-secret-123456',
     GOOGLE_CLIENT_SECRET: 'bundle-canary-google-secret-123456',
