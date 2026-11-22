@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import { dashboardGatewayNamespace, dashboardReadRoutes } from './dashboard-contracts.js'
 import type { DocumentDetail } from '../../src/features/api/document-contracts.js'
-import { receiptStateSchema } from '../../src/features/api/device-contracts.js'
+import { cancelReceiptSchema, receiptStateSchema } from '../../src/features/api/device-contracts.js'
+import { writebackRecoverySchema } from '../../src/features/api/writeback-recovery-contracts.js'
 import {
   requireDashboardSession,
   type DashboardSession,
@@ -439,13 +440,13 @@ export async function handleDashboardRequest(
 }
 
 /** Explicit mapping from the existing verified dashboard role model. */
-const middlewareRoles = {
+export const middlewareRoles = {
   admin: 'administrator',
   operator: 'operations',
   viewer: 'viewer',
 } as const
 
-function relayUserId(email: string, env: Record<string, string | undefined>): string | null {
+export function relayUserId(email: string, env: Record<string, string | undefined>): string | null {
   try {
     const entries: unknown = JSON.parse(env.DASHBOARD_USER_IDS ?? '')
     if (!entries || typeof entries !== 'object' || Array.isArray(entries)) return null
@@ -470,7 +471,7 @@ function relayUserId(email: string, env: Record<string, string | undefined>): st
   }
 }
 
-/** Receipt reads only. The former control endpoint is retained as an explicit denial. */
+/** Fixed G03 receipt read and explicitly confirmed cancellation relay. */
 export async function handleG03Request(
   req: ApiRequest,
   res: ApiResponse,
@@ -493,12 +494,36 @@ export async function handleG03Request(
 
   const session = await dependencies.authorize(req, res)
   if (!session) return
-  if (cancel)
+  if (cancel && session.role !== 'admin')
     return reply(
       403,
-      'G03_CANCELLATION_DISABLED',
-      'G03 receipt cancellation is disabled pending a separate authorization security review.',
+      'FORBIDDEN',
+      'Administrator permission is required to cancel an open G03 receipt.',
     )
+  if (cancel) {
+    const headers = Object.fromEntries(
+      Object.entries(req.headers).map(([key, value]) => [key.toLowerCase(), value]),
+    )
+    const origin = headers.origin
+    const contentType = Array.isArray(headers['content-type'])
+      ? headers['content-type'][0]
+      : headers['content-type']
+    const fetchSite = headers['sec-fetch-site']
+    const body = req.body
+    const emptyObject =
+      body !== null &&
+      typeof body === 'object' &&
+      !Array.isArray(body) &&
+      Object.keys(body).length === 0
+    if (
+      origin !== dependencies.env.DASHBOARD_AUTH_URL ||
+      (fetchSite !== undefined && fetchSite !== 'same-origin') ||
+      typeof contentType !== 'string' ||
+      contentType.split(';', 1)[0]!.trim().toLowerCase() !== 'application/json' ||
+      !emptyObject
+    )
+      return reply(400, 'INVALID_REQUEST', 'The G03 cancellation request is invalid.')
+  }
   const role = Object.prototype.hasOwnProperty.call(middlewareRoles, session.role)
     ? middlewareRoles[session.role]
     : undefined
@@ -563,19 +588,26 @@ export async function handleG03Request(
     }
   }
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 8_000)
+  const timeout = setTimeout(() => controller.abort(), cancel ? 20_000 : 8_000)
   try {
     const upstream = await dependencies.fetch(
-      new URL('/integrations/device/g03/current-receipt', base),
+      new URL(
+        cancel
+          ? '/integrations/device/g03/cancel-receipt'
+          : '/integrations/device/g03/current-receipt',
+        base,
+      ),
       {
-        method: 'GET',
+        method: cancel ? 'POST' : 'GET',
         headers: {
           Accept: 'application/json',
           Authorization: 'Bearer ' + token,
           'x-dashboard-user-id': userId,
           'x-dashboard-role': role,
           'X-Request-ID': requestId,
+          ...(cancel ? { 'Content-Type': 'application/json' } : {}),
         },
+        ...(cancel ? { body: '{}' } : {}),
         signal: controller.signal,
         redirect: 'error',
         cache: 'no-store',
@@ -595,8 +627,10 @@ export async function handleG03Request(
         'The device gateway returned invalid or oversized JSON.',
       )
     }
-    const result = receiptStateSchema.safeParse(payload)
-    if (result.success && upstream.ok) {
+    const result = cancel
+      ? cancelReceiptSchema.safeParse(payload)
+      : receiptStateSchema.safeParse(payload)
+    if (result.success && (upstream.ok || cancel)) {
       if (protectedData(result.data) || internalDiagnostic(result.data))
         return reply(
           502,
@@ -670,6 +704,227 @@ export async function handleG03Request(
           'UPSTREAM_UNAVAILABLE',
           'The device gateway could not be reached. The operation outcome is not confirmed.',
         )
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+/** Fixed request-scoped Zoho writeback relay; never uses the read service bearer. */
+export async function handleDashboardWritebackRequest(
+  req: ApiRequest,
+  res: ApiResponse,
+  documentType: 'invoice' | 'credit_note',
+  dependencies: GatewayDependencies = defaultDependencies,
+) {
+  let requestId: string = randomUUID()
+  const reply = (status: number, code: string, message: string, upstreamStatus?: number) =>
+    send(res, status, code, message, requestId, upstreamStatus)
+  res.setHeader('Cache-Control', 'no-store')
+  res.setHeader('X-Request-ID', requestId)
+
+  const routeBase = `/api/dashboard/writebacks/${documentType === 'invoice' ? 'invoices' : 'credit-notes'}/`
+  let requestUrl: URL
+  try {
+    if (!req.url?.startsWith(routeBase) || req.url.length > 512 || req.url.includes('#'))
+      return reply(400, 'INVALID_REQUEST', 'The writeback request URL is invalid.')
+    requestUrl = new URL(req.url, 'https://dashboard.invalid')
+    if (requestUrl.search || requestUrl.pathname !== req.url)
+      return reply(400, 'INVALID_REQUEST', 'The writeback request URL is invalid.')
+  } catch {
+    return reply(400, 'INVALID_REQUEST', 'The writeback request URL is invalid.')
+  }
+  const requestIdFromPath = requestUrl.pathname.slice(routeBase.length)
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(requestIdFromPath))
+    return reply(400, 'INVALID_REQUEST', 'The fiscalization request ID is invalid.')
+
+  const method = req.method
+  if (method !== 'GET' && method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST')
+    return reply(405, 'METHOD_NOT_ALLOWED', 'Only GET and POST are supported for writeback.')
+  }
+
+  const session = await dependencies.authorize(req, res)
+  if (!session) return
+  if (session.role !== 'admin' && session.role !== 'operator')
+    return reply(403, 'FORBIDDEN', 'Administrator or operations permission is required.')
+
+  if (method === 'POST') {
+    const headers = Object.fromEntries(
+      Object.entries(req.headers).map(([key, value]) => [key.toLowerCase(), value]),
+    )
+    const origin = headers.origin
+    const fetchSite = headers['sec-fetch-site']
+    const body = req.body
+    const emptyBody =
+      body === undefined ||
+      body === null ||
+      (typeof body === 'object' && !Array.isArray(body) && Object.keys(body).length === 0)
+    if (
+      origin !== dependencies.env.DASHBOARD_AUTH_URL ||
+      (fetchSite !== undefined && fetchSite !== 'same-origin') ||
+      !emptyBody
+    )
+      return reply(400, 'INVALID_REQUEST', 'The writeback recovery request is invalid.')
+  }
+
+  const role = middlewareRoles[session.role]
+  const userId = relayUserId(session.email, dependencies.env)
+  if (!userId)
+    return reply(
+      503,
+      'DASHBOARD_IDENTITY_UNCONFIGURED',
+      'Configure DASHBOARD_USER_IDS with a trusted operator ID for this user.',
+    )
+  const base = resolveUpstreamBase(dependencies.env)
+  if (!base)
+    return reply(503, 'UPSTREAM_UNCONFIGURED', 'Configure the HTTPS public gateway origin.')
+  const writebackToken = dependencies.env.DASHBOARD_WRITEBACK_SERVICE_BEARER_TOKEN
+  if (!writebackToken || !/^[A-Za-z0-9._~+/-]+=*$/.test(writebackToken))
+    return reply(
+      503,
+      'WRITEBACK_CREDENTIAL_UNCONFIGURED',
+      'Configure DASHBOARD_WRITEBACK_SERVICE_BEARER_TOKEN on the dashboard server.',
+    )
+
+  const protectedValues = [
+    writebackToken,
+    dependencies.env.DASHBOARD_UPSTREAM_TOKEN,
+    base.origin,
+    base.hostname,
+    dependencies.env.DASHBOARD_SESSION_SECRET,
+    dependencies.env.GOOGLE_CLIENT_SECRET,
+    dependencies.env.DASHBOARD_USER_IDS,
+    userId,
+  ].filter((value): value is string => Boolean(value))
+  const containsProtectedData = (value: unknown) => {
+    const serialized = JSON.stringify(value)
+    return protectedValues.some((secret) =>
+      [secret, encodeURIComponent(secret)].some((candidate) =>
+        serialized.includes(JSON.stringify(candidate).slice(1, -1)),
+      ),
+    )
+  }
+  const retainRequestId = (value: unknown) => {
+    if (
+      typeof value === 'string' &&
+      /^[A-Za-z0-9._:-]{1,128}$/.test(value) &&
+      !containsProtectedData(value)
+    ) {
+      requestId = value
+      res.setHeader('X-Request-ID', requestId)
+    }
+  }
+
+  const target = new URL(
+    `/api/dashboard/writebacks/${documentType === 'invoice' ? 'invoices' : 'credit-notes'}/${encodeURIComponent(requestIdFromPath)}`,
+    base,
+  )
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), method === 'POST' ? 25_000 : 8_000)
+  try {
+    const upstream = await dependencies.fetch(target, {
+      method,
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${writebackToken}`,
+        'x-dashboard-user-id': userId,
+        'x-dashboard-role': role,
+        'X-Request-ID': requestId,
+      },
+      signal: controller.signal,
+      redirect: 'error',
+      cache: 'no-store',
+    })
+    retainRequestId(
+      upstream.headers.get('x-request-id') ?? upstream.headers.get('x-correlation-id'),
+    )
+    let payload: unknown
+    try {
+      payload = await readBoundedJson(upstream, controller.signal, 262_144)
+    } catch {
+      if (controller.signal.aborted) throw new Error('Upstream timed out')
+      return reply(
+        502,
+        'UPSTREAM_CONTRACT_ERROR',
+        'The writeback gateway returned invalid or oversized JSON.',
+      )
+    }
+
+    if (upstream.ok) {
+      const parsed = writebackRecoverySchema.safeParse(payload)
+      if (!parsed.success || parsed.data.requestId !== requestIdFromPath)
+        return reply(
+          502,
+          'UPSTREAM_CONTRACT_ERROR',
+          'The writeback gateway response did not match the request contract.',
+        )
+      if (!upstream.headers.get('x-request-id') && !upstream.headers.get('x-correlation-id'))
+        retainRequestId(parsed.data.correlationId)
+      if (containsProtectedData(parsed.data))
+        return reply(
+          502,
+          'UPSTREAM_CONTRACT_ERROR',
+          'The writeback gateway response contained protected server data.',
+        )
+      return res.status(upstream.status).json(parsed.data)
+    }
+
+    const errorSchema = z.object({
+      error: z
+        .union([
+          z.string(),
+          z.object({
+            code: z.string().optional(),
+            message: z.string().optional(),
+            requestId: z.string().optional(),
+            correlationId: z.string().optional(),
+          }),
+        ])
+        .optional(),
+      code: z.string().optional(),
+      message: z.string().optional(),
+      requestId: z.string().optional(),
+      correlationId: z.string().optional(),
+      request_id: z.string().optional(),
+    })
+    const parsedError = errorSchema.safeParse(payload)
+    const nested =
+      parsedError.success && parsedError.data.error && typeof parsedError.data.error === 'object'
+        ? parsedError.data.error
+        : undefined
+    if (parsedError.success && !upstream.headers.has('x-request-id'))
+      retainRequestId(
+        nested?.requestId ??
+          nested?.correlationId ??
+          parsedError.data.requestId ??
+          parsedError.data.correlationId ??
+          parsedError.data.request_id,
+      )
+    const rawCode =
+      parsedError.success && typeof parsedError.data.error === 'string'
+        ? parsedError.data.error
+        : (nested?.code ?? (parsedError.success ? parsedError.data.code : undefined))
+    const rawMessage =
+      nested?.message ?? (parsedError.success ? parsedError.data.message : undefined)
+    const safeCode =
+      rawCode && /^[A-Z][A-Z0-9_]{0,79}$/.test(rawCode) && !containsProtectedData(rawCode)
+        ? rawCode
+        : 'WRITEBACK_GATEWAY_ERROR'
+    const safeMessage =
+      rawMessage &&
+      rawMessage.length <= 500 &&
+      !containsProtectedData(rawMessage) &&
+      !/[\r\n<>]|\bstack\b|\btraceback\b|node_modules|[A-Z]:\\|\/(?:home|var|etc)\//i.test(
+        rawMessage,
+      )
+        ? rawMessage
+        : `The writeback gateway returned HTTP ${upstream.status}.`
+    const status = upstream.status === 401 ? 502 : upstream.status
+    return reply(status, safeCode, safeMessage, upstream.status)
+  } catch {
+    return controller.signal.aborted
+      ? reply(504, 'UPSTREAM_TIMEOUT', 'The writeback request timed out; refresh its status.')
+      : reply(502, 'UPSTREAM_UNAVAILABLE', 'The writeback gateway could not be reached.')
   } finally {
     clearTimeout(timeout)
   }
