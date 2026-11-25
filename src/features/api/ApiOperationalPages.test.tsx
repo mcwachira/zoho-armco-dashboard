@@ -4,7 +4,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 
 vi.mock('@/lib/auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'admin' } }) }))
 
@@ -49,14 +49,29 @@ describe('authenticated operational views', () => {
   it('opens a filtered credit-note deep link and keeps writeback independent of fiscalization', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
-    const { mockCreditNotes } = await import('./mock-api-fixtures')
+    const { mockCreditNotes, mockCreditNoteDetails } = await import('./mock-api-fixtures')
     const note = {
       ...mockCreditNotes[0],
       fiscalizationStatus: 'FISCALIZED',
       writebackStatus: 'failed',
     }
     const fetch = vi.fn(async (path: string) => {
-      const params = new URL(path, 'https://dashboard.test').searchParams
+      const url = new URL(path, 'https://dashboard.test')
+      const params = url.searchParams
+      if (url.pathname === `/api/dashboard/documents/credit-notes/${note.zohoDocumentId}`)
+        return jsonResponse({
+          documentType: 'credit_note',
+          zohoDocumentId: note.zohoDocumentId,
+          document: {
+            creditnote_id: note.zohoDocumentId,
+            creditnote_number: note.documentNumber,
+            customer_name: note.customerName,
+            line_items: [],
+          },
+          fiscalizationRequest: null,
+        })
+      if (url.pathname === '/api/dashboard/credit-note')
+        return jsonResponse(mockCreditNoteDetails[params.get('id')!]!)
       return jsonResponse({
         page: 1,
         pageSize: 25,
@@ -69,12 +84,16 @@ describe('authenticated operational views', () => {
     })
     vi.stubGlobal('fetch', fetch)
     const { ApiFiscalization } = await import('./ApiOperationalPages')
+    const { ApiDocuments } = await import('./ApiDocuments')
     render(
       <QueryClientProvider
         client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
       >
         <MemoryRouter initialEntries={['/fiscalization?kind=credit_note&status=FISCALIZED']}>
-          <ApiFiscalization range="24h" />
+          <Routes>
+            <Route path="/fiscalization" element={<ApiFiscalization range="24h" />} />
+            <Route path="/credit-notes" element={<ApiDocuments kind="credit_note" />} />
+          </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
@@ -92,6 +111,22 @@ describe('authenticated operational views', () => {
       within(row).getByRole('link', { name: `Open execution request ${note.requestId}` }),
     ).toHaveAttribute('href', `/requests?kind=credit_note&id=${encodeURIComponent(note.requestId)}`)
     expect(screen.getByText(/Zoho documents never submitted are unavailable/)).toBeInTheDocument()
+    expect(
+      within(row).getByRole('link', {
+        name: `Open credit note details for ${note.documentNumber}`,
+      }),
+    ).toHaveAttribute('href', `/credit-notes?id=${note.zohoDocumentId}`)
+    await userEvent.setup().click(within(row).getByText('FISCALIZED'))
+    expect(await screen.findByRole('link', { name: 'Credit Note Details' })).toHaveAttribute(
+      'href',
+      `/credit-notes?id=${note.zohoDocumentId}`,
+    )
+    await userEvent.setup().click(screen.getByRole('link', { name: 'Credit Note Details' }))
+    expect(await screen.findByRole('region', { name: 'Document information' })).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/dashboard/documents/credit-notes/${note.zohoDocumentId}`,
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
   }, 15_000)
 
   it('shows unavailable register totals when upstream reads fail', async () => {
@@ -176,7 +211,7 @@ describe('authenticated operational views', () => {
     expect(within(pending).getByText('4')).toBeInTheDocument()
   }, 15_000)
 
-  it('renders persisted invoice data and search without calling unsupported detail endpoints', async () => {
+  it('opens the source invoice details from a persisted fiscalization record', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
     vi.stubEnv('VITE_API_BASE_URL', 'https://middleware.example.test')
@@ -218,6 +253,18 @@ describe('authenticated operational views', () => {
     }
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(String(input), 'https://dashboard.example.test')
+      if (url.pathname === '/api/dashboard/documents/invoices/zoho-42')
+        return jsonResponse({
+          documentType: 'invoice',
+          zohoDocumentId: 'zoho-42',
+          document: {
+            invoice_id: 'zoho-42',
+            invoice_number: 'INV-42',
+            customer_name: 'Verified Customer',
+            line_items: [],
+          },
+          fiscalizationRequest: null,
+        })
       if (url.pathname === '/api/dashboard/invoice' && url.searchParams.get('id') === 'request-42')
         return jsonResponse(detail)
       if (url.pathname === '/api/dashboard/invoices') {
@@ -235,6 +282,7 @@ describe('authenticated operational views', () => {
     vi.stubGlobal('fetch', fetchSpy)
     vi.resetModules()
     const { ApiFiscalization, statusBadgeTone } = await import('./ApiOperationalPages')
+    const { ApiDocuments } = await import('./ApiDocuments')
     expect(statusBadgeTone('unavailable')).toBe('bad')
     expect(statusBadgeTone('not_available')).toBe('bad')
     expect(statusBadgeTone('available')).toBe('good')
@@ -247,8 +295,11 @@ describe('authenticated operational views', () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter>
-          <ApiFiscalization range="24h" />
+        <MemoryRouter initialEntries={['/fiscalization']}>
+          <Routes>
+            <Route path="/fiscalization" element={<ApiFiscalization range="24h" />} />
+            <Route path="/invoices" element={<ApiDocuments kind="invoice" />} />
+          </Routes>
         </MemoryRouter>
       </QueryClientProvider>,
     )
@@ -269,16 +320,23 @@ describe('authenticated operational views', () => {
       )
     })
 
-    await user.click(screen.getByText('INV-42'))
-    expect(await screen.findByRole('dialog', { name: 'INV-42' })).toBeInTheDocument()
-    expect(await screen.findByText('Document & processing')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Open original Zoho document' })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: 'Open invoice details for INV-42' })).toHaveAttribute(
       'href',
       '/invoices?id=zoho-42',
     )
-    expect(
-      fetchSpy.mock.calls.some(([input]) => String(input).startsWith('/api/dashboard/invoices/')),
-    ).toBe(false)
+    await user.click(within(screen.getByText('INV-42').closest('tr')!).getByText('Succeeded'))
+    expect(await screen.findByRole('dialog', { name: 'INV-42' })).toBeInTheDocument()
+    expect(await screen.findByText('Document & processing')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'Invoice Details' })).toHaveAttribute(
+      'href',
+      '/invoices?id=zoho-42',
+    )
+    await user.click(screen.getByRole('link', { name: 'Invoice Details' }))
+    expect(await screen.findByRole('region', { name: 'Document information' })).toBeInTheDocument()
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/dashboard/documents/invoices/zoho-42',
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
 
     queryClient.clear()
   }, 15_000)

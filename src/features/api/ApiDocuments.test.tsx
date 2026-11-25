@@ -35,6 +35,85 @@ afterEach(() => {
 })
 
 describe('user-provided Zoho source samples inside the existing dashboard envelope', () => {
+  it('shows a related persisted writeback separately from the invoice fiscalization summary', async () => {
+    const document = zohoInvoiceDetailSample.invoice
+    const id = String(document.invoice_id)
+    const writebackOperation = {
+      writebackId: 'wb-fixture-1',
+      documentType: 'INVOICE',
+      documentId: id,
+      requestId: 'request-fixture-1',
+      status: 'failed',
+      errorCategory: 'CONFIGURATION_REQUIRED',
+      errorDetails: 'A custom field needs configuration.',
+      retryCount: 2,
+      providerExchangeCount: 3,
+      nextRetryAt: null,
+      createdAt: '2026-11-14T07:00:00Z',
+      updatedAt: '2026-11-14T07:01:00Z',
+      completedAt: null,
+      fieldsWritten: ['CU Receipt Number'],
+      fieldsRemaining: ['KRA QR URL'],
+      manualInterventionRequired: true,
+    }
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        documentType: 'invoice',
+        zohoDocumentId: id,
+        document,
+        fiscalizationRequest: null,
+      }),
+    )
+    await renderDocuments('invoice', `/invoices?id=${id}`, fetch, false, writebackOperation)
+    const section = await screen.findByRole('region', { name: 'Related writeback operation' })
+    expect(within(section).getByText('failed')).toBeInTheDocument()
+    expect(within(section).getByText('request-fixture-1')).toBeInTheDocument()
+    expect(within(section).getByText('A custom field needs configuration.')).toBeInTheDocument()
+    expect(within(section).getByText('CU Receipt Number')).toBeInTheDocument()
+    expect(within(section).getByText('KRA QR URL')).toBeInTheDocument()
+    expect(screen.getByText(/No fiscalization request is associated/)).toBeInTheDocument()
+  })
+
+  it('shows the writeback operation for a credit-note detail without changing fiscalization state', async () => {
+    const document = zohoCreditNoteDetailSample.creditnote
+    const writebackOperation = {
+      writebackId: 'wb-credit-note-fixture',
+      documentType: 'CREDIT_NOTE',
+      documentId: document.creditnote_id,
+      requestId: null,
+      status: 'retry_scheduled',
+      errorCategory: null,
+      retryCount: 1,
+      providerExchangeCount: 1,
+      nextRetryAt: '2026-11-26T07:00:00.000Z',
+      createdAt: '2026-11-14T07:00:00Z',
+      updatedAt: '2026-11-14T07:01:00Z',
+      completedAt: null,
+    }
+    const fetch = vi.fn().mockResolvedValue(
+      Response.json({
+        documentType: 'credit_note',
+        zohoDocumentId: document.creditnote_id,
+        document,
+        fiscalizationRequest: null,
+      }),
+    )
+    await renderDocuments(
+      'credit_note',
+      `/credit-notes?id=${document.creditnote_id}`,
+      fetch,
+      false,
+      writebackOperation,
+    )
+    const section = await screen.findByRole('region', { name: 'Related writeback operation' })
+    expect(within(section).getByText('retry_scheduled')).toBeInTheDocument()
+    expect(section.querySelector('.document-unavailable')).toBeInTheDocument()
+    expect(
+      within(section).getByText('Next retry (local time)').nextElementSibling,
+    ).toHaveTextContent('26 Nov 2026, 10:00 EAT')
+    expect(screen.getByText(/No fiscalization request is associated/)).toBeInTheDocument()
+  })
+
   it('links a numeric invoice ID and shows supplied balances, tax values, discount metadata and compact-offset dates', async () => {
     const document = zohoInvoiceDetailSample.invoice
     const id = String(document.invoice_id)
@@ -42,7 +121,7 @@ describe('user-provided Zoho source samples inside the existing dashboard envelo
       .fn()
       .mockImplementation(async (url: string) =>
         Response.json(
-          url.includes('?id=')
+          /\/api\/dashboard\/documents\/(?:invoices|credit-notes)\/[^/?]+$/.test(url)
             ? { documentType: 'invoice', zohoDocumentId: id, document, fiscalizationRequest: null }
             : documentPageFixture([{ ...document, fiscalizationRequest: null }]),
         ),
@@ -93,7 +172,7 @@ describe('user-provided Zoho source samples inside the existing dashboard envelo
     const document = zohoCreditNoteDetailSample.creditnote
     const fetch = vi.fn().mockImplementation(async (url: string) =>
       Response.json(
-        url.includes('?id=')
+        /\/api\/dashboard\/documents\/(?:invoices|credit-notes)\/[^/?]+$/.test(url)
           ? {
               documentType: 'credit_note',
               zohoDocumentId: document.creditnote_id,
@@ -121,6 +200,9 @@ describe('user-provided Zoho source samples inside the existing dashboard envelo
     )
     const totals = screen.getByRole('region', { name: 'Document totals' })
     expect(within(totals).getByText('Basic Tax').nextElementSibling).toHaveTextContent('2.50')
+    expect(
+      within(totals).getByText('Remaining credit balance').nextElementSibling,
+    ).toHaveTextContent('10')
     expect(within(totals).getByText('Offer for the referral')).toBeInTheDocument()
     expect(within(totals).getByText('Tax ID: 903000000000356')).toBeInTheDocument()
     for (const label of ['Subtotal', 'Tax', 'Discount']) {
@@ -148,7 +230,7 @@ describe('user-provided Zoho source samples inside the existing dashboard envelo
     }
     const fetch = vi.fn().mockImplementation(async (url: string) =>
       Response.json(
-        url.includes('?id=')
+        /\/api\/dashboard\/documents\/(?:invoices|credit-notes)\/[^/?]+$/.test(url)
           ? {
               documentType: 'credit_note',
               zohoDocumentId: document.creditnote_id,
@@ -264,7 +346,7 @@ describe('document registers with synthetic provisional-field fixtures', () => {
       const number = isInvoice ? 'UI-INV-0042' : 'UI-CN-0042'
       const fetch = vi.fn().mockImplementation(async (url: string) =>
         Response.json(
-          url.includes('?id=')
+          /\/api\/dashboard\/documents\/(?:invoices|credit-notes)\/[^/?]+$/.test(url)
             ? {
                 documentType: kind,
                 zohoDocumentId: id,
@@ -610,7 +692,7 @@ describe('persisted CU/KRA document reconciliation', () => {
       const reconciliation = 'reconciliation' in scenario ? scenario.reconciliation : undefined
       const fetch = vi.fn().mockImplementation(async (url: string) =>
         Response.json(
-          url.includes('?id=')
+          /\/api\/dashboard\/documents\/(?:invoices|credit-notes)\/[^/?]+$/.test(url)
             ? {
                 documentType: kind,
                 zohoDocumentId: id,
@@ -663,7 +745,7 @@ describe('persisted CU/KRA document reconciliation', () => {
       const fiscal = { ...fiscalizationFixture, ...reconciledReceiptFixture }
       const fetch = vi.fn().mockImplementation(async (url: string) =>
         Response.json(
-          url.includes('?id=')
+          /\/api\/dashboard\/documents\/(?:invoices|credit-notes)\/[^/?]+$/.test(url)
             ? {
                 documentType: kind,
                 zohoDocumentId: id,
@@ -796,6 +878,14 @@ describe('rich persisted document evidence', () => {
       const doc = {
         ...invoiceDocumentFixture,
         ...(isInvoice ? {} : creditNoteDocumentFixture),
+        ...(isInvoice
+          ? {
+              payment_made: '50.00',
+              credits_applied: '10.00',
+              payment_terms: 30,
+              payment_terms_label: 'Net 30',
+            }
+          : {}),
         customer_pin: 'FIXTURE-CUSTOMER-PIN',
         line_items: [
           {
@@ -818,6 +908,10 @@ describe('rich persisted document evidence', () => {
         }),
       )
       await renderDocuments(kind, `${isInvoice ? '/invoices' : '/credit-notes'}?id=${id}`, fetch)
+      expect(fetch).toHaveBeenCalledWith(
+        `/api/dashboard/documents/${isInvoice ? 'invoices' : 'credit-notes'}/${id}`,
+        expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+      )
       const lines = await screen.findByRole('region', { name: 'Line items table' })
       expect(within(lines).getByText('Original Zoho first item')).toBeInTheDocument()
       expect(within(lines).getByText('Original Zoho second item')).toBeInTheDocument()
@@ -825,6 +919,11 @@ describe('rich persisted document evidence', () => {
       expect(within(lines).getByText('Original source HS name')).toBeInTheDocument()
       expect(screen.queryByText('FIXTURE-CUSTOMER-PIN')).not.toBeInTheDocument()
       expect(screen.queryByText('Customer PIN')).not.toBeInTheDocument()
+      if (isInvoice) {
+        expect(screen.getByText('Payments received').parentElement).toHaveTextContent('50.00')
+        expect(screen.getByText('Credits applied').parentElement).toHaveTextContent('10.00')
+        expect(screen.getByText('Payment terms').parentElement).toHaveTextContent('Net 30')
+      }
       expect(screen.getByText('Snapshot item before device commands')).toBeInTheDocument()
       expect(screen.getByText('Snapshot HS description')).toBeInTheDocument()
       expect(screen.getByRole('cell', { name: 'A' })).toBeInTheDocument()
@@ -911,13 +1010,14 @@ describe('document contract boundaries', () => {
     expect(documentListPath('credit_note')).toBe(
       '/api/dashboard/documents/credit-notes?page=1&pageSize=25',
     )
-    expect(documentDetailPath('invoice', 'inv/?1')).toBe(
-      '/api/dashboard/documents/invoice?id=inv%2F%3F1',
+    expect(documentDetailPath('invoice', 'zoho-inv-1')).toBe(
+      '/api/dashboard/documents/invoices/zoho-inv-1',
     )
     expect(documentDetailPath('credit_note', 'cn-1')).toBe(
-      '/api/dashboard/documents/credit-note?id=cn-1',
+      '/api/dashboard/documents/credit-notes/cn-1',
     )
     expect(() => documentDetailPath('invoice', ' ')).toThrow('Zoho document ID')
+    expect(() => documentDetailPath('invoice', 'inv/?1')).toThrow('Zoho document ID')
   })
 
   it('rejects unsupported middleware-only filters, bad dates and out-of-range pages', () => {
@@ -961,16 +1061,24 @@ async function renderDocuments(
   entry: string,
   fetch: ReturnType<typeof vi.fn>,
   reconciliation = false,
+  writebackOperation?: unknown,
 ) {
   vi.stubEnv('DEV', false)
   vi.stubEnv('VITE_DATA_MODE', 'api')
   vi.stubGlobal('fetch', fetch)
   const { ApiDocuments, ApiReceiptReconciliation } = await import('./ApiDocuments')
+  const initialEntry = writebackOperation
+    ? {
+        pathname: entry.split('?')[0],
+        search: entry.includes('?') ? `?${entry.split('?').slice(1).join('?')}` : '',
+        state: { writebackOperation },
+      }
+    : entry
   return render(
     <QueryClientProvider
       client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}
     >
-      <MemoryRouter initialEntries={[entry]}>
+      <MemoryRouter initialEntries={[initialEntry]}>
         {reconciliation ? <ApiReceiptReconciliation /> : <ApiDocuments kind={kind} />}
       </MemoryRouter>
     </QueryClientProvider>,
@@ -1140,7 +1248,7 @@ describe('document register and detail unavailable states', () => {
     )
     await renderDocuments('credit_note', '/credit-notes?id=zoho-cn-1', fetch)
     await waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
-    expect(fetch.mock.calls[0][0]).toBe('/api/dashboard/documents/credit-note?id=zoho-cn-1')
+    expect(fetch.mock.calls[0][0]).toBe('/api/dashboard/documents/credit-notes/zoho-cn-1')
     expect(screen.getByRole('heading', { name: 'Credit-note detail' })).toBeInTheDocument()
     expect(screen.getByText(/Zoho document ID: zoho-cn-1/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Back to register' })).toHaveAttribute(

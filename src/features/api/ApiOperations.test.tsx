@@ -3,7 +3,7 @@ import '@testing-library/jest-dom/vitest'
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Route, Routes } from 'react-router-dom'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 afterEach(() => {
@@ -351,6 +351,75 @@ describe('reconciliation scopes', () => {
 })
 
 describe('operational collections', () => {
+  it.each(['invoice', 'credit_note'] as const)(
+    'opens the original %s document from writeback history and keeps writeback status visible',
+    async (kind) => {
+      vi.stubEnv('DEV', false)
+      vi.stubEnv('VITE_DATA_MODE', 'api')
+      const { invoiceDocumentFixture, creditNoteDocumentFixture } =
+        await import('./__fixtures__/document-fixtures')
+      const id =
+        kind === 'invoice'
+          ? invoiceDocumentFixture.invoice_id
+          : creditNoteDocumentFixture.creditnote_id
+      const detail = {
+        documentType: kind,
+        zohoDocumentId: id,
+        document: kind === 'invoice' ? invoiceDocumentFixture : creditNoteDocumentFixture,
+        fiscalizationRequest: null,
+      }
+      const writeback = {
+        ...operation,
+        writebackId: `wb-${kind}`,
+        documentType: kind === 'invoice' ? 'INVOICE' : 'CREDIT_NOTE',
+        documentId: id,
+      }
+      const fetcher = vi.fn<typeof fetch>(async (input) => {
+        const url = new URL(String(input), 'https://dashboard.test')
+        if (url.pathname === '/api/dashboard/writebacks')
+          return response({ page: 1, pageSize: 25, total: 1, items: [writeback] })
+        if (
+          url.pathname ===
+          `/api/dashboard/documents/${kind === 'invoice' ? 'invoices' : 'credit-notes'}/${id}`
+        )
+          return response(detail)
+        return response({ error: { code: 'NOT_FOUND' } }, 404)
+      })
+      vi.stubGlobal('fetch', fetcher)
+      const { ApiWritebackOperations } = await import('./ApiOperations')
+      const { ApiDocuments } = await import('./ApiDocuments')
+      const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      render(
+        <QueryClientProvider client={client}>
+          <MemoryRouter initialEntries={['/writeback']}>
+            <Routes>
+              <Route path="/writeback" element={<ApiWritebackOperations />} />
+              <Route path="/invoices" element={<ApiDocuments kind="invoice" />} />
+              <Route path="/credit-notes" element={<ApiDocuments kind="credit_note" />} />
+            </Routes>
+          </MemoryRouter>
+        </QueryClientProvider>,
+      )
+      await userEvent.setup().click(await screen.findByRole('link', { name: new RegExp(id) }))
+      expect(
+        await screen.findByRole('heading', {
+          name:
+            kind === 'invoice'
+              ? invoiceDocumentFixture.invoice_number
+              : creditNoteDocumentFixture.creditnote_number,
+        }),
+      ).toBeInTheDocument()
+      expect(screen.getByRole('region', { name: 'Related writeback operation' })).toHaveTextContent(
+        'failed',
+      )
+      expect(fetcher).toHaveBeenCalledWith(
+        `/api/dashboard/documents/${kind === 'invoice' ? 'invoices' : 'credit-notes'}/${id}`,
+        expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+      )
+      client.clear()
+    },
+  )
+
   it('renders independent writeback persistence fields and paginates server data', async () => {
     const fetcher = vi.fn<typeof fetch>(async (input) => {
       const page = Number(new URL(String(input), 'https://dashboard.test').searchParams.get('page'))
@@ -363,6 +432,11 @@ describe('operational collections', () => {
     })
     const client = await showPage(fetcher)
     expect(await screen.findByText('note-page-1')).toBeInTheDocument()
+    expect(
+      screen.getByRole('link', {
+        name: 'Open credit note details for note-page-1',
+      }),
+    ).toHaveAttribute('href', '/credit-notes?id=note-page-1')
     expect(screen.getByRole('link', { name: 'request-1' })).toHaveAttribute(
       'href',
       '/requests?id=request-1&kind=credit_note',
@@ -421,7 +495,7 @@ describe('operational collections', () => {
     client.clear()
   })
 
-  it.each(['reconciliation', 'events', 'operations'] as const)(
+  it.each(['reconciliation', 'operations'] as const)(
     'fails closed for %s records with undocumented DTOs',
     async (family) => {
       const fetcher = vi.fn<typeof fetch>(async () =>
@@ -435,6 +509,28 @@ describe('operational collections', () => {
       client.clear()
     },
   )
+
+  it('renders a validated derived event response', async () => {
+    const event = {
+      eventId: 'event-ui-1',
+      eventType: 'writeback_failed',
+      timestamp: '2026-11-20T10:00:00.000Z',
+      documentType: 'invoice',
+      documentId: 'document-1',
+      requestId: null,
+      message: 'Writeback needs attention.',
+      metadata: { retryCount: 2 },
+    }
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      response({ page: 1, pageSize: 25, total: 1, items: [event] }),
+    )
+    const client = await showPage(fetcher, '/events', 'events')
+    expect(await screen.findByText('Writeback needs attention.')).toBeInTheDocument()
+    expect(screen.getByText('writeback_failed')).toBeInTheDocument()
+    expect(screen.getByText(/No request ID/)).toBeInTheDocument()
+    expect(fetcher).toHaveBeenCalledOnce()
+    client.clear()
+  })
 
   it('renders persisted manual-review cases and loads validated case details', async () => {
     const { mockManualReview, mockManualReviewCase } = await import('./mock-api-fixtures')

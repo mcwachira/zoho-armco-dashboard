@@ -41,7 +41,7 @@ async function renderApp(path: string, authMode = 'development-mock') {
 describe('application route smoke checks', () => {
   it.each([
     ['/invoices', '/api/dashboard/documents/invoices'],
-    ['/invoices?id=fixture-invoice-42', '/api/dashboard/documents/invoice'],
+    ['/invoices?id=fixture-invoice-42', '/api/dashboard/documents/invoices/fixture-invoice-42'],
     ['/device', '/api/device/g03/current-receipt'],
   ])(
     'refreshes the active %s read and reports a failed refresh',
@@ -72,7 +72,7 @@ describe('application route smoke checks', () => {
               503,
             )
           if (readPath === '/api/device/g03/current-receipt') return json(closedReceipt)
-          if (readPath === '/api/dashboard/documents/invoice')
+          if (readPath === '/api/dashboard/documents/invoices/fixture-invoice-42')
             return json({
               documentType: 'invoice',
               zohoDocumentId: invoiceDocumentFixture.invoice_id,
