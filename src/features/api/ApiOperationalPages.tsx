@@ -1169,7 +1169,14 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
                         >
                           {visibleColumns.document && (
                             <td>
-                              <strong>{row.documentNumber ?? 'Number unavailable'}</strong>
+                              <Link
+                                className="document-number"
+                                to={`/${row.documentType === 'invoice' ? 'invoices' : 'credit-notes'}?${new URLSearchParams({ id: row.zohoDocumentId })}`}
+                                onClick={(event) => event.stopPropagation()}
+                                aria-label={`Open ${row.documentType === 'invoice' ? 'invoice' : 'credit note'} details for ${row.documentNumber ?? row.zohoDocumentId}`}
+                              >
+                                {row.documentNumber ?? 'Number unavailable'}
+                              </Link>
                               <small>
                                 {row.documentType.replace('_', ' ')} · {row.requestId}
                               </small>
@@ -1457,7 +1464,7 @@ export function RecordDrawer({
               <Link
                 to={`/${selected.kind === 'invoice' ? 'invoices' : 'credit-notes'}?id=${encodeURIComponent(request.zohoDocumentId)}`}
               >
-                Open original Zoho document
+                {selected.kind === 'invoice' ? 'Invoice Details' : 'Credit Note Details'}
               </Link>
             </p>
           )}
@@ -2377,7 +2384,14 @@ function LegacyApiWriteback({ range }: { range: GlobalDateRange }) {
                     }
                   >
                     <td>
-                      <strong>{row.documentNumber ?? 'Number unavailable'}</strong>
+                      <Link
+                        className="document-number"
+                        to={`/${recordKind === 'invoice' ? 'invoices' : 'credit-notes'}?${new URLSearchParams({ id: row.zohoDocumentId })}`}
+                        onClick={(event) => event.stopPropagation()}
+                        aria-label={`Open ${recordKind === 'invoice' ? 'invoice' : 'credit note'} details for ${row.documentNumber ?? row.zohoDocumentId}`}
+                      >
+                        {row.documentNumber ?? 'Number unavailable'}
+                      </Link>
                       <small>{row.zohoDocumentId}</small>
                     </td>
                     <td>{recordKind.replace('_', ' ')}</td>

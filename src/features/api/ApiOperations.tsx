@@ -9,7 +9,7 @@ import {
   useDashboardManualReviewQuery,
 } from './queries'
 import type { ManualReviewCase, ManualReviewSummaryItem } from './schemas'
-import { writebackOperationsPageSchema } from './operation-contracts'
+import { dashboardEventsPageSchema, writebackOperationsPageSchema } from './operation-contracts'
 import { ApiReceiptReconciliation } from './ApiDocuments'
 import './api-operational-pages.css'
 
@@ -372,7 +372,8 @@ function ApiGenericOperationCollection({
   })}`
   const query = useQuery({
     queryKey: ['middleware', 'operation-family', family, path],
-    queryFn: ({ signal }) => getJson(path, z.never(), signal),
+    queryFn: ({ signal }) =>
+      getJson(path, family === 'events' ? dashboardEventsPageSchema : z.never(), signal),
     enabled: apiMode === 'api',
     retry: false,
   })
@@ -459,10 +460,32 @@ function ApiGenericOperationCollection({
           ) : query.isError ? (
             <ErrorState error={query.error} retry={() => void query.refetch()} />
           ) : null}
-          <p>
-            The local contract documents this endpoint, but omits its exact record response schema.
-            This view cannot safely render its records until that schema is supplied.
-          </p>
+          {family === 'events' && query.data && (
+            <div className="api-event-list" aria-label="Persisted operational events">
+              {(query.data as ReturnType<typeof dashboardEventsPageSchema.parse>).items.map(
+                (event) => (
+                  <article className="api-timeline-item" key={event.eventId}>
+                    <time dateTime={event.timestamp}>
+                      {new Date(event.timestamp).toLocaleString()}
+                    </time>
+                    <strong>{event.eventType}</strong>
+                    <span>{event.message}</span>
+                    <small>
+                      {event.documentType ?? 'Unknown document type'} ·{' '}
+                      {event.documentId ?? 'No document ID'} · {event.requestId ?? 'No request ID'}
+                    </small>
+                  </article>
+                ),
+              )}
+              {!query.data.items.length && <p>No persisted events match these filters.</p>}
+            </div>
+          )}
+          {family !== 'events' && (
+            <p>
+              The local contract documents this endpoint, but omits its exact record response
+              schema. This view cannot safely render its records until that schema is supplied.
+            </p>
+          )}
           <p>
             <Link to="/requests">Inspect persisted request details and execution evidence</Link>
           </p>
@@ -477,6 +500,16 @@ function ApiGenericOperationCollection({
       </section>
     </>
   )
+}
+
+function writebackDocumentPath(documentType: string, documentId: string) {
+  const normalized = documentType
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_')
+  const segment =
+    normalized === 'invoice' ? 'invoices' : normalized === 'credit_note' ? 'credit-notes' : null
+  return segment ? `/${segment}?id=${encodeURIComponent(documentId)}` : null
 }
 
 export function ApiWritebackOperations() {
@@ -607,49 +640,68 @@ export function ApiWritebackOperations() {
                   </tr>
                 </thead>
                 <tbody>
-                  {data.items.map((row) => (
-                    <tr key={row.writebackId}>
-                      <td>
-                        <strong>{row.documentId}</strong>
-                        <small>{row.documentType}</small>
-                      </td>
-                      <td>
-                        {row.requestId ? (
-                          <Link
-                            to={`/requests?${toQueryString({ id: row.requestId, ...(row.documentType.toUpperCase() === 'CREDIT_NOTE' ? { kind: 'credit_note' } : {}) }).slice(1)}`}
-                          >
-                            {row.requestId}
-                          </Link>
-                        ) : (
-                          'Unavailable'
-                        )}
-                      </td>
-                      <td>{row.status}</td>
-                      <td>{row.errorCategory ?? 'None returned'}</td>
-                      <td>{row.retryCount}</td>
-                      <td>{row.providerExchangeCount}</td>
-                      <td>
-                        <time dateTime={row.createdAt}>
-                          {new Date(row.createdAt).toLocaleString()}
-                        </time>
-                      </td>
-                      <td>
-                        <time dateTime={row.updatedAt}>
-                          {new Date(row.updatedAt).toLocaleString()}
-                        </time>
-                      </td>
-                      <td>
-                        {row.completedAt
-                          ? new Date(row.completedAt).toLocaleString()
-                          : 'Not completed'}
-                      </td>
-                      <td>
-                        {row.nextRetryAt
-                          ? new Date(row.nextRetryAt).toLocaleString()
-                          : 'Not scheduled'}
-                      </td>
-                    </tr>
-                  ))}
+                  {data.items.map((row) => {
+                    const documentPath = writebackDocumentPath(row.documentType, row.documentId)
+                    const isCreditNote =
+                      row.documentType
+                        .trim()
+                        .toLowerCase()
+                        .replace(/[\s-]+/g, '_') === 'credit_note'
+                    return (
+                      <tr key={row.writebackId}>
+                        <td>
+                          {documentPath ? (
+                            <Link
+                              className="document-number"
+                              to={documentPath}
+                              state={{ writebackOperation: row }}
+                              aria-label={`Open ${isCreditNote ? 'credit note' : 'invoice'} details for ${row.documentId}`}
+                            >
+                              {row.documentId}
+                            </Link>
+                          ) : (
+                            <strong>{row.documentId}</strong>
+                          )}
+                          <small>{row.documentType}</small>
+                        </td>
+                        <td>
+                          {row.requestId ? (
+                            <Link
+                              to={`/requests?${toQueryString({ id: row.requestId, ...(row.documentType.toUpperCase() === 'CREDIT_NOTE' ? { kind: 'credit_note' } : {}) }).slice(1)}`}
+                            >
+                              {row.requestId}
+                            </Link>
+                          ) : (
+                            'Unavailable'
+                          )}
+                        </td>
+                        <td>{row.status}</td>
+                        <td>{row.errorCategory ?? 'None returned'}</td>
+                        <td>{row.retryCount}</td>
+                        <td>{row.providerExchangeCount}</td>
+                        <td>
+                          <time dateTime={row.createdAt}>
+                            {new Date(row.createdAt).toLocaleString()}
+                          </time>
+                        </td>
+                        <td>
+                          <time dateTime={row.updatedAt}>
+                            {new Date(row.updatedAt).toLocaleString()}
+                          </time>
+                        </td>
+                        <td>
+                          {row.completedAt
+                            ? new Date(row.completedAt).toLocaleString()
+                            : 'Not completed'}
+                        </td>
+                        <td>
+                          {row.nextRetryAt
+                            ? new Date(row.nextRetryAt).toLocaleString()
+                            : 'Not scheduled'}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
