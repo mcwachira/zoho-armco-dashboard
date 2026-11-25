@@ -421,7 +421,7 @@ describe('operational collections', () => {
     client.clear()
   })
 
-  it.each(['manual-review', 'reconciliation', 'events', 'operations'] as const)(
+  it.each(['reconciliation', 'events', 'operations'] as const)(
     'fails closed for %s records with undocumented DTOs',
     async (family) => {
       const fetcher = vi.fn<typeof fetch>(async () =>
@@ -436,24 +436,29 @@ describe('operational collections', () => {
     },
   )
 
-  it('uses exact case detail static gateway and documented collection filters', async () => {
-    const fetcher = vi.fn<typeof fetch>(async () =>
-      response({ error: { code: 'CONTRACT_UNAVAILABLE', message: 'Exact DTO missing' } }, 501),
-    )
+  it('renders persisted manual-review cases and loads validated case details', async () => {
+    const { mockManualReview, mockManualReviewCase } = await import('./mock-api-fixtures')
+    const item = mockManualReview.items[0]!
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input), 'https://dashboard.test')
+      if (url.pathname === '/api/dashboard/manual-review-case')
+        return response(mockManualReviewCase)
+      return response(mockManualReview)
+    })
     const client = await showPage(fetcher, '/manual-review', 'manual-review')
-    await screen.findByRole('alert')
+    expect(await screen.findByText(item.reason ?? 'No reason recorded.')).toBeInTheDocument()
     const user = userEvent.setup()
     await user.selectOptions(screen.getByLabelText('Review status'), 'open')
-    await user.click(screen.getByRole('button', { name: 'Apply filters' }))
     await waitFor(() =>
       expect(fetcher.mock.calls.some(([url]) => String(url).includes('status=open'))).toBe(true),
     )
-    await user.type(screen.getByLabelText('Case ID'), 'case-42')
-    await user.click(screen.getByRole('button', { name: 'Open case' }))
+    await user.click(screen.getByRole('button', { name: 'Open case details' }))
+    expect(await screen.findByText(item.id)).toBeInTheDocument()
+    expect(screen.getByText(`Operation: ${item.operationId}`)).toBeInTheDocument()
     await waitFor(() =>
       expect(
         fetcher.mock.calls.some(
-          ([url]) => String(url) === '/api/dashboard/manual-review-case?id=case-42',
+          ([url]) => String(url) === `/api/dashboard/manual-review-case?id=${item.id}`,
         ),
       ).toBe(true),
     )

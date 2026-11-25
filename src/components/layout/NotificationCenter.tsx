@@ -41,12 +41,12 @@ export function NotificationCenter({
     allowApiRead && !isDemo,
   )
   const apiAlerts: Alert[] =
-    !isDemo && manualReviews.data?.availability === 'partial'
+    !isDemo && manualReviews.data
       ? manualReviews.data.items.map((item) => ({
-          id: item.caseId,
+          id: item.id,
           level: 'warning',
           title: 'Manual review required',
-          detail: item.reason,
+          detail: item.reason ?? 'No reason recorded.',
           at: item.updatedAt,
         }))
       : []
@@ -124,7 +124,7 @@ export function NotificationCenter({
                 <h2>Notifications</h2>
                 <span>
                   {!isDemo
-                    ? 'Notification source unavailable'
+                    ? 'Manual-review cases'
                     : unreadCount
                       ? `${unreadCount} unread`
                       : 'All caught up'}
@@ -146,24 +146,20 @@ export function NotificationCenter({
             )}
             {!isDemo && (
               <div className="notification-demo">
-                <span /> MANUAL-REVIEW COLLECTION AND EVENT FEED UNAVAILABLE
+                <span /> LIVE MANUAL-REVIEW ALERTS
               </div>
             )}
-            {!isDemo && manualReviews.isLoading ? (
+            {!isDemo && !allowApiRead ? (
+              <div className="notification-empty" role="status">
+                Sign in to view authorized dashboard notifications.
+              </div>
+            ) : !isDemo && manualReviews.isLoading ? (
               <div className="notification-empty" role="status">
                 Checking persisted manual-review cases…
               </div>
             ) : !isDemo && manualReviews.isError ? (
               <div className="notification-empty" role="alert">
                 Manual-review notifications could not be loaded.
-              </div>
-            ) : !isDemo && manualReviews.data?.availability === 'unavailable' ? (
-              <div className="notification-empty" role="status">
-                {manualReviews.data.reason}
-              </div>
-            ) : !isDemo && !allowApiRead ? (
-              <div className="notification-empty" role="status">
-                Sign in to view authorized dashboard notifications.
               </div>
             ) : activeAlerts.length > 0 ? (
               <div className="notification-list">

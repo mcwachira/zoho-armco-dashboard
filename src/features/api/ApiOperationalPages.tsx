@@ -375,14 +375,8 @@ export function ApiOverview({
     available && writebackTerminal > 0
       ? Math.round((writebackSucceeded / writebackTerminal) * 100)
       : null
-  const manualReviewCount =
-    manualReview.data?.availability === 'partial' ? manualReview.data.items.length : null
-  const manualReviewLabel =
-    manualReview.data?.availability === 'partial' && manualReview.data.hasMore
-      ? `At least ${manualReviewCount}`
-      : manualReviewCount === null
-        ? 'Unavailable'
-        : String(manualReviewCount)
+  const manualReviewCount = manualReview.data?.total ?? null
+  const manualReviewLabel = manualReviewCount === null ? 'Unavailable' : String(manualReviewCount)
   const recentRequests = [
     ...(recentInvoices.data?.items ?? []).map((item) => ({ ...item, kind: 'invoice' as const })),
     ...(recentCreditNotes.data?.items ?? []).map((item) => ({
@@ -608,11 +602,7 @@ export function ApiOverview({
             <Metric
               label={localMockApiEnabled ? 'DEMO · MANUAL REVIEW' : 'MANUAL REVIEW'}
               value={manualReviewLabel}
-              foot={
-                manualReview.data?.availability === 'partial' && manualReview.data.hasMore
-                  ? 'Lower bound from the first 100 unresolved review records'
-                  : 'Unresolved review records in this bounded response; API total is unavailable'
-              }
+              foot="Persisted manual-review cases reported by middleware"
               icon={AlertTriangle}
               links={[{ to: '/manual-review', label: 'Review cases' }]}
             />
@@ -1705,18 +1695,15 @@ function InvoiceDetail({
           <>
             <DetailLine
               label="Invoice number"
-              value={request.snapshot.invoice.invoiceNumber ?? 'Unavailable'}
+              value={request.snapshot.invoiceNumber ?? 'Unavailable'}
             />
-            <DetailLine
-              label="Invoice date"
-              value={request.snapshot.invoice.date ?? 'Unavailable'}
-            />
-            <DetailLine label="Currency" value={request.snapshot.invoice.currency} />
-            <DetailLine label="Subtotal" value={request.snapshot.invoice.subtotal} />
-            <DetailLine label="Tax total" value={request.snapshot.invoice.taxTotal} />
-            <DetailLine label="Total" value={request.snapshot.invoice.total} />
+            <DetailLine label="Invoice date" value={request.snapshot.date ?? 'Unavailable'} />
+            <DetailLine label="Currency" value={request.snapshot.currency} />
+            <DetailLine label="Subtotal" value={request.snapshot.subtotal} />
+            <DetailLine label="Tax total" value={request.snapshot.taxTotal} />
+            <DetailLine label="Total" value={request.snapshot.total} />
             <SnapshotLines
-              lines={request.snapshot.invoice.lines.map((line) => ({
+              lines={request.snapshot.lines.map((line) => ({
                 name: line.description ?? line.itemName ?? 'Unnamed line',
                 quantity: line.quantity,
                 rate: line.unitPrice,
@@ -2476,7 +2463,7 @@ function LegacyApiMonitoring() {
   const reconciliation = useDashboardReconciliationQuery()
   const capabilities = useDashboardCapabilitiesQuery()
   const services = useDashboardServiceHealthQuery()
-  const manual = reviews.data?.availability === 'partial' ? reviews.data : null
+  const manual = reviews.data
   const unavailableCaps = capabilities.data?.capabilities
   return (
     <>
@@ -2506,20 +2493,14 @@ function LegacyApiMonitoring() {
             error={reviews.error}
             refetch={reviews.refetch}
           />
-          {reviews.data?.availability === 'unavailable' && (
-            <Availability
-              title="Manual-review data unavailable"
-              description={reviews.data.reason}
-            />
-          )}
           {manual &&
             (manual.items.length ? (
               <div className="api-review-list">
                 {manual.items.map((item) => (
-                  <article key={item.caseId} className="api-review-card">
+                  <article key={item.id} className="api-review-card">
                     <div className="api-review-top">
                       <div>
-                        <strong>{item.reason}</strong>
+                        <strong>{item.reason ?? 'No reason recorded.'}</strong>
                         <small>
                           Request <code>{item.requestId}</code>
                         </small>
@@ -2541,13 +2522,12 @@ function LegacyApiMonitoring() {
                 ))}
                 <ManualReviewPagination
                   page={page}
-                  hasMore={manual.hasMore}
+                  hasMore={page * manual.pageSize < manual.total}
                   itemCount={manual.items.length}
                   onPage={setPage}
                 />
                 <p className="api-note">
-                  Total count is intentionally omitted; the next-page control uses a bounded
-                  look-ahead read.
+                  {manual.total} persisted review {manual.total === 1 ? 'case' : 'cases'}.
                 </p>
               </div>
             ) : (
@@ -2750,7 +2730,7 @@ function apiOriginLabel() {
 
 export function ApiNotifications() {
   const reviews = useDashboardManualReviewQuery({ page: 1, pageSize: 8 })
-  const items = reviews.data?.availability === 'partial' ? reviews.data.items : []
+  const items = reviews.data?.items ?? []
   return (
     <div className="api-notification-content">
       {reviews.isLoading ? (
@@ -2759,22 +2739,18 @@ export function ApiNotifications() {
         <span>Manual-review alerts could not be loaded.</span>
       ) : items.length ? (
         items.map((item) => (
-          <div key={item.caseId}>
+          <div key={item.id}>
             <AlertTriangle size={14} />
             <span>
               <strong>Manual review required</strong>
               <small>
-                {item.reason} · {new Date(item.updatedAt).toLocaleString()}
+                {item.reason ?? 'No reason recorded.'} · {new Date(item.updatedAt).toLocaleString()}
               </small>
             </span>
           </div>
         ))
       ) : (
-        <span>
-          {reviews.data?.availability === 'unavailable'
-            ? 'Manual-review notification source unavailable.'
-            : 'No unresolved manual-review cases.'}
-        </span>
+        <span>No unresolved manual-review cases.</span>
       )}
     </div>
   )
