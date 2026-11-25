@@ -6,6 +6,8 @@ import {
   mockInvoiceDetails,
   mockCreditNoteDetails,
   mockDeviceDiagnostics,
+  mockManualReview,
+  mockManualReviewCase,
 } from '../../src/features/api/mock-api-fixtures'
 
 const token = 'fixture-only-dashboard-service-credential'
@@ -69,6 +71,8 @@ describe('read-only gateway contract boundary', () => {
       '/events',
       '/invoices',
       '/invoices/{id}',
+      '/manual-review',
+      '/manual-review/{id}',
       '/operations',
       '/overview',
       '/reconciliation',
@@ -93,21 +97,89 @@ describe('read-only gateway contract boundary', () => {
     expect(result.headers['cache-control']).toBe('no-store')
   })
 
-  it.each(['capabilities', 'manual-review', 'manual-review-case?id=case-1'])(
-    'keeps the existing UI endpoint safely unavailable without forwarding %s',
-    async (resource) => {
-      const result = await invoke(`/api/dashboard/${resource}`)
-      expect(result.status).toBe(503)
-      expect(result.body).toMatchObject({
-        error: {
-          code: 'GATEWAY_ROUTE_UNAVAILABLE',
-          message: `The dashboard has no confirmed Public Gateway contract for ${resource.split('?')[0]}. No upstream request was made.`,
-          upstreamStatus: undefined,
-        },
-      })
-      expect(result.fetch).not.toHaveBeenCalled()
-    },
-  )
+  it('keeps capabilities unavailable until its own gateway contract is verified', async () => {
+    const result = await invoke('/api/dashboard/capabilities')
+    expect(result.status).toBe(503)
+    expect(result.body).toMatchObject({
+      error: { code: 'GATEWAY_ROUTE_UNAVAILABLE' },
+    })
+    expect(result.fetch).not.toHaveBeenCalled()
+  })
+
+  it('forwards manual-review pagination and validates empty and populated persisted pages', async () => {
+    const empty = await invoke('/api/dashboard/manual-review?page=1&pageSize=8', {
+      page: 1,
+      pageSize: 8,
+      total: 0,
+      items: [],
+    })
+    expect(empty.status).toBe(200)
+    expect(empty.body).toEqual({ page: 1, pageSize: 8, total: 0, items: [] })
+    expect(empty.fetch.mock.calls[0]![0].toString()).toBe(
+      'https://gateway.example.test/api/dashboard/manual-review?page=1&pageSize=8',
+    )
+
+    const item = mockManualReview.items[0]!
+    const populated = await invoke('/api/dashboard/manual-review?page=2&pageSize=8&status=open', {
+      page: 2,
+      pageSize: 8,
+      total: 9,
+      items: [item],
+    })
+    expect(populated.status).toBe(200)
+    expect(populated.body).toEqual({ page: 2, pageSize: 8, total: 9, items: [item] })
+    expect(populated.fetch.mock.calls[0]![0].toString()).toBe(
+      'https://gateway.example.test/api/dashboard/manual-review?page=2&pageSize=8&status=open',
+    )
+    expect(populated.fetch.mock.calls[0]![1].headers['X-Request-ID']).toBeTruthy()
+    expect(populated.fetch.mock.calls[0]![1].headers.Authorization).toBe(`Bearer ${token}`)
+
+    const invalid = await invoke('/api/dashboard/manual-review?page=1&pageSize=8', {
+      page: 1,
+      pageSize: 8,
+      total: 1,
+      items: [{ ...item, unexpectedProperty: 'must-not-be-returned' }],
+    })
+    expect(invalid.status).toBe(502)
+    expect(invalid.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+    expect(JSON.stringify(invalid.body)).not.toContain('must-not-be-returned')
+  })
+
+  it('validates manual-review case detail identity and preserves upstream not-found status', async () => {
+    const item = mockManualReview.items[0]!
+    const payload = mockManualReviewCase
+    const success = await invoke(`/api/dashboard/manual-review-case?id=${item.id}`, payload)
+    expect(success.status).toBe(200)
+    expect(success.body).toEqual(payload)
+    expect(success.fetch.mock.calls[0]![0].toString()).toBe(
+      `https://gateway.example.test/api/dashboard/manual-review/${item.id}`,
+    )
+    expect(success.fetch.mock.calls[0]![1].headers['X-Request-ID']).toBeTruthy()
+
+    const mismatch = await invoke(`/api/dashboard/manual-review-case?id=${item.id}`, {
+      ...payload,
+      id: 'different-case',
+    })
+    expect(mismatch.status).toBe(502)
+    expect(mismatch.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+
+    const incorrectlyWrapped = await invoke(`/api/dashboard/manual-review-case?id=${item.id}`, {
+      reviewCase: payload,
+    })
+    expect(incorrectlyWrapped.status).toBe(502)
+    expect(incorrectlyWrapped.body).toMatchObject({
+      error: { code: 'UPSTREAM_CONTRACT_ERROR' },
+    })
+
+    const missing = await invoke(
+      `/api/dashboard/manual-review-case?id=${item.id}`,
+      { error: { code: 'NOT_FOUND', message: 'Manual-review case was not found.' } },
+      'GET',
+      404,
+    )
+    expect(missing.status).toBe(404)
+    expect(missing.fetch).toHaveBeenCalledOnce()
+  })
 
   it.each(['reconciliation', 'events', 'operations'])(
     'identifies a confirmed %s route with a missing response schema accurately',
@@ -165,39 +237,51 @@ describe('read-only gateway contract boundary', () => {
     expect(incompatible.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
   })
 
+  it('forwards invoice detail using the fiscalization request ID and validates the response identity', async () => {
+    const payload = Object.values(mockInvoiceDetails)[0]!
+    const id = payload.request.requestId
+    const result = await invoke(`/api/dashboard/invoice?id=${encodeURIComponent(id)}`, payload)
+    expect(result.status).toBe(200)
+    expect(result.body).toEqual(payload)
+    expect(result.fetch.mock.calls[0]![0].pathname).toBe(`/api/dashboard/invoices/${id}`)
+    expect(result.fetch.mock.calls[0]![1].method).toBe('GET')
+    expect(result.fetch.mock.calls[0]![1].headers.Authorization).toBe(`Bearer ${token}`)
+    expect(result.fetch.mock.calls[0]![1].headers['X-Request-ID']).toBeTruthy()
+
+    const mismatch = await invoke(`/api/dashboard/invoice?id=${encodeURIComponent(id)}`, {
+      request: { ...payload.request, requestId: 'different-request' },
+    })
+    expect(mismatch.status).toBe(502)
+    expect(mismatch.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+
+    const malformed = await invoke(`/api/dashboard/invoice?id=${encodeURIComponent(id)}`, {
+      request: { requestId: id },
+    })
+    expect(malformed.status).toBe(502)
+    expect(malformed.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+
+    const missing = await invoke(
+      `/api/dashboard/invoice?id=${encodeURIComponent(id)}`,
+      { error: { code: 'NOT_FOUND', message: 'Fiscalization request was not found.' } },
+      'GET',
+      404,
+    )
+    expect(missing.status).toBe(404)
+    expect(missing.fetch).toHaveBeenCalledOnce()
+  })
+
   it.each([
-    ['invoice', Object.values(mockInvoiceDetails)[0]!, '/invoices/'],
-    ['request', Object.values(mockInvoiceDetails)[0]!, '/invoices/'],
-    ['credit-note', Object.values(mockCreditNoteDetails)[0]!, '/credit-notes/'],
-  ] as const)(
-    'keeps the prepared %s request template gated pending exact route confirmation',
-    async (resource, payload, base) => {
-      const blocked = await invoke(
-        `/api/dashboard/${resource}?id=${payload.request.requestId}`,
-        payload,
-      )
-      expect(blocked.status).toBe(503)
-      expect(blocked.body).toMatchObject({ error: { code: 'CONTRACT_ROUTE_UNAVAILABLE' } })
-      expect(blocked.fetch).not.toHaveBeenCalled()
-      // Validate identity enforcement for the prepared mapping using a test-only
-      // activation; this does not enable or verify the production gateway route.
-      const route = dashboardReadRoutes[resource]!
-      const unavailable = route.unavailable
-      delete route.unavailable
-      try {
-        const id = payload.request.requestId
-        const result = await invoke(`/api/dashboard/${resource}?id=${id}`, payload)
-        expect(result.status).toBe(200)
-        expect(result.fetch.mock.calls[0]![0].pathname).toBe('/api/dashboard' + base + id)
-        expect(result.fetch.mock.calls[0]![0].search).toBe('')
-        const wrong = await invoke(`/api/dashboard/${resource}?id=different-request`, payload)
-        expect(wrong.status).toBe(502)
-        expect(wrong.body).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
-      } finally {
-        route.unavailable = unavailable
-      }
-    },
-  )
+    ['request', Object.values(mockInvoiceDetails)[0]!],
+    ['credit-note', Object.values(mockCreditNoteDetails)[0]!],
+  ] as const)('keeps the unrequested %s compatibility route gated', async (resource, payload) => {
+    const blocked = await invoke(
+      `/api/dashboard/${resource}?id=${payload.request.requestId}`,
+      payload,
+    )
+    expect(blocked.status).toBe(503)
+    expect(blocked.body).toMatchObject({ error: { code: 'CONTRACT_ROUTE_UNAVAILABLE' } })
+    expect(blocked.fetch).not.toHaveBeenCalled()
+  })
 
   it.each([401, 403, 404, 503])(
     'distinguishes an actual upstream HTTP %s failure from a local route restriction',

@@ -13,7 +13,9 @@ import {
   dashboardInvoiceQueryParamsSchema,
   dashboardOverviewQueryParamsSchema,
   dashboardOverviewSchema,
+  dashboardManualReviewSchema,
   dashboardServiceHealthSchema,
+  manualReviewCaseResponseSchema,
 } from '../../src/features/api/schemas.js'
 import { writebackOperationsPageSchema } from '../../src/features/api/operation-contracts.js'
 
@@ -39,6 +41,8 @@ export type DashboardGatewayPath =
   | '/credit-notes/{id}'
   | '/documents/invoices/{id}'
   | '/documents/credit-notes/{id}'
+  | '/manual-review'
+  | '/manual-review/{id}'
 const text = z.string().trim().min(1).max(128)
 const timestamp = z.string().datetime({ offset: true })
 export const dashboardIdQuery = z
@@ -85,6 +89,7 @@ export interface DashboardReadRoute {
   response?: z.ZodType
   documentDetail?: boolean
   requestDetail?: 'invoice' | 'credit_note'
+  caseDetail?: boolean
   unavailable?: string
   unavailableCode?: string
 }
@@ -115,7 +120,6 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     query: dashboardIdQuery,
     response: dashboardInvoiceDetailSchema,
     requestDetail: 'invoice',
-    ...detailContractPending,
   },
   'credit-note': {
     path: '/credit-notes/{id}',
@@ -171,15 +175,21 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     response: writebackOperationsPageSchema,
   },
   'manual-review': {
+    path: '/manual-review',
     query: z
-      .object({ ...page, ...dates, status: z.enum(['open', 'resolved']).optional() })
-      .strict()
-      .superRefine(orderedDates),
-    ...unavailable,
+      .object({
+        page: z.number().int().min(1).max(100).default(1),
+        pageSize: z.number().int().min(1).max(100).default(25),
+        status: z.enum(['open', 'resolved']).optional(),
+      })
+      .strict(),
+    response: dashboardManualReviewSchema,
   },
   'manual-review-case': {
+    path: '/manual-review/{id}',
     query: dashboardIdQuery,
-    ...unavailable,
+    response: manualReviewCaseResponseSchema,
+    caseDetail: true,
   },
   reconciliation: {
     path: '/reconciliation',

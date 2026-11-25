@@ -1,26 +1,27 @@
 # Dashboard route compatibility
 
-The user supplied eleven canonical route names from the completed G11SERVER
-audit. The dashboard's browser namespace remains `/api/dashboard`; it is not
-automatically an upstream namespace. Code now separates canonical resource
-paths from the established upstream namespace. It preserves `/api/dashboard`
-until the transferred route matrix confirms the full external URLs. The
-canonical-path column below is relative to that retained namespace, not a claim
-that literal gateway roots succeeded.
+The dashboard browser namespace remains `/api/dashboard`. The user has
+confirmed from middleware and Public Gateway source/tests that invoice request
+detail and the two manual-review reads below exist and are allowlisted. The BFF
+preserves its configured Gateway namespace and strictly validates their
+response contracts. Other route mappings remain unchanged.
 
-| Resource                  | Previous upstream configuration         | Prepared canonical path   | Response mapping status                                                 |
-| ------------------------- | --------------------------------------- | ------------------------- | ----------------------------------------------------------------------- |
-| Overview                  | `/api/dashboard/overview`               | `/overview`               | Existing strict schema; fresh sample pending                            |
-| Invoice history           | `/api/dashboard/invoices`               | `/invoices`               | Existing strict history schema; fresh sample pending                    |
-| Credit-note history       | `/api/dashboard/credit-notes`           | `/credit-notes`           | Existing strict history schema; fresh sample pending                    |
-| Full invoice register     | `/api/dashboard/documents/invoices`     | `/documents/invoices`     | Existing provisional projection; availability/sample pending            |
-| Full credit-note register | `/api/dashboard/documents/credit-notes` | `/documents/credit-notes` | Existing provisional projection; availability/sample pending            |
-| Writeback                 | Locally disabled                        | `/writebacks`             | Existing documented strict schema enabled; actual compatibility pending |
-| Reconciliation            | Locally disabled                        | `/reconciliation`         | Configured; missing actual row DTO blocks forwarding                    |
-| Events                    | Locally disabled                        | `/events`                 | Configured; missing actual row DTO blocks forwarding                    |
-| Pending operations        | Locally disabled                        | `/operations`             | Configured; missing actual row DTO blocks forwarding                    |
-| Services                  | `/api/dashboard/services`               | `/services`               | Existing limited service schema; fresh sample pending                   |
-| Device projection         | Locally disabled                        | `/device`                 | Existing strict projection enabled; actual compatibility pending        |
+| Resource                  | Previous upstream configuration         | Prepared canonical path   | Response mapping status                                                                  |
+| ------------------------- | --------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
+| Overview                  | `/api/dashboard/overview`               | `/overview`               | Existing strict schema; fresh sample pending                                             |
+| Invoice history           | `/api/dashboard/invoices`               | `/invoices`               | Existing strict history schema; fresh sample pending                                     |
+| Credit-note history       | `/api/dashboard/credit-notes`           | `/credit-notes`           | Existing strict history schema; fresh sample pending                                     |
+| Full invoice register     | `/api/dashboard/documents/invoices`     | `/documents/invoices`     | Existing provisional projection; availability/sample pending                             |
+| Full credit-note register | `/api/dashboard/documents/credit-notes` | `/documents/credit-notes` | Existing provisional projection; availability/sample pending                             |
+| Writeback                 | Locally disabled                        | `/writebacks`             | Existing documented strict schema enabled; actual compatibility pending                  |
+| Invoice request detail    | Previously contract gated               | `/invoices/{requestId}`   | Enabled for internal fiscalization request ID; strict detail DTO and identity validation |
+| Manual-review collection  | Previously gateway gated                | `/manual-review`          | Enabled; page/pageSize/status and strict summary-row DTO                                 |
+| Manual-review case detail | Previously gateway gated                | `/manual-review/{caseId}` | Enabled; direct strict case DTO with supporting attempts and identity validation         |
+| Reconciliation            | Locally disabled                        | `/reconciliation`         | Configured; missing actual row DTO blocks forwarding                                     |
+| Events                    | Locally disabled                        | `/events`                 | Configured; missing actual row DTO blocks forwarding                                     |
+| Pending operations        | Locally disabled                        | `/operations`             | Configured; missing actual row DTO blocks forwarding                                     |
+| Services                  | `/api/dashboard/services`               | `/services`               | Existing limited service schema; fresh sample pending                                    |
+| Device projection         | Locally disabled                        | `/device`                 | Existing strict projection enabled; actual compatibility pending                         |
 
 ## Fresh live namespace discrepancy
 
@@ -43,23 +44,22 @@ namespace rather than switching known reads to unsigned-404 roots. Do not certif
 the mappings before the matrix or authenticated evidence resolves this. Do not add automatic
 fallbacks that retry alternate namespaces and conceal configuration mistakes.
 
-## Detail routes and unsupported aliases
+## Remaining detail routes and unsupported aliases
 
-Prepared `/invoices/{id}`, `/credit-notes/{id}` and document collection/ID
-templates derive from older documentation, not inspected successful responses
-from the completed audit. They remain locally blocked until exact paths,
-parameters and DTOs are confirmed. Synthetic tests of their existing parsers do
-not activate them in production.
+Invoice request detail maps the browser-supplied internal fiscalization
+request ID to `/invoices/{requestId}`. Credit-note request detail and source
+document detail templates remain locally blocked pending their own verified
+contracts. Synthetic tests do not activate those routes.
 
 No `/monitoring`, `/system-health`, `/fiscalization-requests` or queue-depth route
 was created. Monitoring reuses Overview; health uses scoped Services; invoice
-and credit-note histories remain separate. Capabilities and manual-review routes
-are not part of the eleven newly confirmed names and retain their existing
-explicit unavailable states pending the detailed reports.
+and credit-note histories remain separate. Capabilities and manual-review's
+separate request-ID lookup remain gated because their contracts were not
+confirmed by this task.
 
 ## Required transferred evidence
 
-The following reports are still absent from this checkout:
+The source reports are still absent from this checkout:
 `07-dashboard-integration-findings.md`,
 `09-required-fixes-and-implementation-plan.md`, `10-dashboard-api-contract.md`,
 `02-middleware-api-inventory.md`, `04-gateway-route-matrix.md`.

@@ -216,7 +216,7 @@ export async function handleDashboardRequest(
 
   const documentId = (queryResult.data as { id?: string }).id
   const upstreamPath =
-    definition.documentDetail || definition.requestDetail
+    definition.documentDetail || definition.requestDetail || definition.caseDetail
       ? definition.path.replace('{id}', encodeURIComponent(documentId!))
       : definition.path
   const target = new URL(dashboardGatewayNamespace + upstreamPath, baseUrl)
@@ -354,6 +354,15 @@ export async function handleDashboardRequest(
           502,
           'UPSTREAM_CONTRACT_ERROR',
           'The middleware returned a different request identity.',
+        )
+    }
+    if (definition.caseDetail) {
+      const detail = parsed.data as { id: string }
+      if (detail.id !== documentId)
+        return reply(
+          502,
+          'UPSTREAM_CONTRACT_ERROR',
+          'The middleware returned a different manual-review case identity.',
         )
     }
     if (definition.documentDetail) {
