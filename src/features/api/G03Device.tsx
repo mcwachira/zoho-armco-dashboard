@@ -330,6 +330,14 @@ function CancellationOutcome({ result }: { result: CancelReceiptResult }) {
           <dt>Requested at</dt>
           <dd>{documentDate(result.requestedAt, true)}</dd>
         </div>
+        {result.initialReceipt.error && (
+          <div>
+            <dt>Initial receipt read error</dt>
+            <dd>
+              {result.initialReceipt.error.code}: {result.initialReceipt.error.message}
+            </dd>
+          </div>
+        )}
         {result.cancellationCommand?.error && (
           <div>
             <dt>Command error</dt>

@@ -137,6 +137,22 @@ describe('G03 receipt monitoring with actual same-origin transport', () => {
     expect(screen.getByRole('heading', { name: 'Receipt state: CLOSED' })).toBeInTheDocument()
   })
 
+  it('reports no_open_receipt without claiming cancellation success', async () => {
+    const user = userEvent.setup()
+    const { post } = await mount(openReceipt)
+    post.mockResolvedValueOnce(json(cancellationFixture('no_open_receipt')))
+    await user.click(screen.getByRole('button', { name: 'Cancel Open Receipt' }))
+    await user.click(screen.getByRole('button', { name: 'Confirm cancellation' }))
+    const result = (await screen.findByText('Receipt was already closed')).closest(
+      '[role="status"]',
+    )
+    expect(result).toHaveTextContent(
+      'The receipt was already CLOSED. No cancellation command was sent.',
+    )
+    expect(result).not.toHaveTextContent('Cancellation verified')
+    expect(post).toHaveBeenCalledOnce()
+  })
+
   it.each([closedReceipt, unknownReceipt])(
     'does not allow cancellation when latest state is $state',
     async (observation) => {
@@ -172,6 +188,8 @@ describe('G03 receipt monitoring with actual same-origin transport', () => {
             ? 'The receipt state could not be verified.'
             : 'The device rejected cancellation.',
     )
+    if (status === 'verification_required')
+      expect(result).toHaveTextContent(/Initial receipt read error\s*READ_TIMEOUT/)
     expect(result).not.toHaveTextContent('Cancellation verified')
   })
 
