@@ -80,6 +80,50 @@ function requestFetch(total = 1) {
 }
 
 describe('documented fiscalization request history', () => {
+  it('renders metadata-only request snapshots alongside the source Zoho invoice', async () => {
+    const source = mockInvoiceDetails[mockInvoices[0]!.requestId]!
+    const fallback = requestFetch()
+    const request = {
+      ...source.request,
+      snapshot: {
+        present: true,
+        valid: true,
+        version: 1,
+        snapshotId: '5565037800b822c607d28bff3245a67ae29822b5f96ea843fcadef422ae21b1b',
+      },
+    }
+    const fetch = vi.fn(async (path: string) =>
+      path.startsWith('/api/dashboard/invoice?') ? json({ request }) : fallback(path),
+    )
+
+    await mount(fetch, `/requests?id=${encodeURIComponent(request.requestId)}`)
+
+    const dialog = await screen.findByRole('dialog')
+    expect(
+      await within(dialog).findByRole('region', { name: 'Document information' }),
+    ).toBeInTheDocument()
+    expect(within(dialog).getByText('Zoho Books source invoice')).toBeInTheDocument()
+    expect(within(dialog).getByText('Snapshot present').nextElementSibling).toHaveTextContent('Yes')
+    expect(within(dialog).getByText('Snapshot valid').nextElementSibling).toHaveTextContent('Yes')
+    expect(within(dialog).getByText('Snapshot ID').nextElementSibling).toHaveTextContent(
+      request.snapshot.snapshotId,
+    )
+    expect(
+      within(dialog).getByRole('button', { name: new RegExp(request.requestId) }),
+    ).toBeInTheDocument()
+    expect(
+      within(dialog).getByRole('button', { name: new RegExp(request.zohoDocumentId) }),
+    ).toBeInTheDocument()
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/dashboard/invoice?id=${request.requestId}`,
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
+    expect(fetch).toHaveBeenCalledWith(
+      `/api/dashboard/documents/invoices/${request.zohoDocumentId}`,
+      expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
+  }, 15_000)
+
   it('uses the documented invoice history DTO and keeps execution, transmission and writeback independent', async () => {
     const fetch = requestFetch()
     await mount(fetch)

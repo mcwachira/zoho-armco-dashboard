@@ -2,7 +2,11 @@ import { describe, expect, it, vi } from 'vitest'
 import type { GatewayDependencies } from './dashboard-gateway'
 import { handleDashboardRequest } from './dashboard-gateway'
 import type { DashboardSession } from './auth'
-import { mockOverview, mockServiceHealth } from '../../src/features/api/mock-api-fixtures'
+import {
+  mockInvoiceDetails,
+  mockOverview,
+  mockServiceHealth,
+} from '../../src/features/api/mock-api-fixtures'
 
 function responseMock() {
   const headers: Record<string, string> = {}
@@ -147,6 +151,65 @@ describe('read-only Vercel dashboard gateway', () => {
     expect(res.status()).toBe(502)
     expect(res.body()).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
     expect(JSON.stringify(res.body())).not.toContain('incorrect')
+  })
+
+  it('logs only invoice request snapshot shape on detail schema failure and keeps it out of the API response', async () => {
+    const fiscalizationRequestId = Object.keys(mockInvoiceDetails)[0]!
+    const payload = structuredClone(mockInvoiceDetails[fiscalizationRequestId]!)
+    Object.assign(payload.request.snapshot, {
+      unexpectedProperty: { customerName: 'private-customer', invoiceNumber: 'private-invoice' },
+      nullableProperty: null,
+    })
+    const fetch = vi.fn().mockResolvedValue(Response.json(payload))
+    const res = responseMock()
+    const diagnostic = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    try {
+      await handleDashboardRequest(
+        request('GET', `/api/dashboard/invoice?id=${encodeURIComponent(fiscalizationRequestId)}`),
+        res.response as never,
+        deps({
+          fetch,
+          env: {
+            DASHBOARD_UPSTREAM_BASE_URL: 'https://testing.example.test',
+            DASHBOARD_UPSTREAM_TOKEN: 'test-dashboard-read-token',
+          },
+        }),
+      )
+
+      expect(res.status()).toBe(502)
+      expect(res.body()).toMatchObject({ error: { code: 'UPSTREAM_CONTRACT_ERROR' } })
+      expect(JSON.stringify(res.body())).not.toContain('validationIssues')
+      const forwardedDashboardRequestId = fetch.mock.calls[0]![1]?.headers
+      expect(diagnostic).toHaveBeenCalledTimes(1)
+      expect(diagnostic.mock.calls[0]).toEqual([
+        'dashboard_invoice_request_snapshot_contract_diagnostic',
+        {
+          dashboardRequestId: expect.any(String),
+          fiscalizationRequestId,
+          snapshotExists: true,
+          snapshotProperties: expect.objectContaining({
+            present: { type: 'boolean', isNull: false },
+            version: { type: 'number', isNull: false },
+            snapshotId: { type: 'string', isNull: false },
+            unexpectedProperty: { type: 'object', isNull: false },
+            nullableProperty: { type: 'null', isNull: true },
+          }),
+        },
+      ])
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-customer')
+      expect(JSON.stringify(diagnostic.mock.calls)).not.toContain('private-invoice')
+      expect(JSON.stringify(res.body())).not.toContain('unexpectedProperty')
+      expect(JSON.stringify(res.body())).not.toContain('private-customer')
+      expect(JSON.stringify(res.body())).not.toContain('test-dashboard-read-token')
+      expect(forwardedDashboardRequestId).toEqual(
+        expect.objectContaining({
+          'X-Request-ID': diagnostic.mock.calls[0]![1].dashboardRequestId,
+        }),
+      )
+    } finally {
+      diagnostic.mockRestore()
+    }
   })
 
   it('requires the service credential before sending requests', async () => {

@@ -69,12 +69,41 @@ export function resolveReceiptReconciliation(value: {
   fiscalizationRequest?:
     | (PersistedReceiptPair & {
         reconciliation?: ReceiptReconciliation | null
+        deviceValues?: PersistedReceiptPair | null
         writebackValues?: PersistedReceiptPair | null
       })
     | null
 }): ReceiptReconciliation {
   const fiscal = value.fiscalizationRequest
   const supplied = value.reconciliation ?? fiscal?.reconciliation
+  const suppliedHasEvidence = Boolean(supplied?.cuReceiptNumber?.trim() || supplied?.kraUrl?.trim())
+  if (supplied && suppliedHasEvidence) {
+    const calculated = calculateReceiptReconciliation(supplied.cuReceiptNumber, supplied.kraUrl)
+    if (
+      supplied.status === calculated.status &&
+      supplied.cuReceiptNumber === calculated.cuReceiptNumber &&
+      supplied.invoiceNo === calculated.invoiceNo &&
+      supplied.kraUrl === calculated.kraUrl
+    )
+      return supplied
+    return {
+      ...calculated,
+      reason: `Supplied reconciliation evidence recalculated from its CU receipt number and KRA URL: ${calculated.reason}`,
+    }
+  }
+  // Fiscalization's device response is the primary receipt evidence. The list
+  // serializer may also include an older reconciliation projection whose
+  // receipt fields are empty even though deviceValues contains the returned
+  // CU/KRA values. Keep the pair together so values from different sources are
+  // never combined.
+  const device = fiscal?.deviceValues
+  if (device && (device.cuReceiptNumber?.trim() || device.kraQrUrl?.trim())) {
+    const result = calculateReceiptReconciliation(device.cuReceiptNumber, device.kraQrUrl)
+    return {
+      ...result,
+      reason: `Persisted fiscalization device values: ${result.reason}`,
+    }
+  }
   if (supplied) {
     const calculated = calculateReceiptReconciliation(supplied.cuReceiptNumber, supplied.kraUrl)
     if (

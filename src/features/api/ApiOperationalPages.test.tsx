@@ -217,7 +217,7 @@ describe('authenticated operational views', () => {
     expect(within(pending).getByText('4')).toBeInTheDocument()
   }, 15_000)
 
-  it('opens Zoho invoice details from a fiscalization row without calling the failing request-detail route', async () => {
+  it('opens Zoho invoice details from fiscalization history using the Zoho document ID', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
     vi.stubEnv('VITE_API_BASE_URL', 'https://middleware.example.test')
@@ -242,32 +242,6 @@ describe('authenticated operational views', () => {
             fiscalizedAt: invoice.fiscalizedAt,
           },
         })
-      if (url.pathname === '/api/dashboard/invoice' && url.searchParams.get('id') === 'request-42')
-        return new Response(
-          JSON.stringify({
-            error: {
-              code: 'UPSTREAM_CONTRACT_ERROR',
-              message: 'The middleware response did not match the dashboard contract.',
-              requestId: 'fixture-request-contract-mismatch',
-              validationIssues: [
-                { path: 'request.snapshot.invoiceNumber', expected: 'string', actual: 'missing' },
-                { path: 'request.snapshot.date', expected: 'string', actual: 'missing' },
-                { path: 'request.snapshot.currency', expected: 'string', actual: 'missing' },
-                { path: 'request.snapshot.subtotal', expected: 'string', actual: 'missing' },
-                { path: 'request.snapshot.taxTotal', expected: 'string', actual: 'missing' },
-                { path: 'request.snapshot.total', expected: 'string', actual: 'missing' },
-                { path: 'request.snapshot.lines', expected: 'array', actual: 'missing' },
-                {
-                  path: 'request.snapshot',
-                  expected: 'no additional properties',
-                  actual: 'object',
-                },
-                { path: 'request.manualReview', expected: 'object', actual: 'missing' },
-              ],
-            },
-          }),
-          { status: 502, headers: { 'Content-Type': 'application/json; charset=utf-8' } },
-        )
       if (url.pathname === '/api/dashboard/invoices') {
         const matches =
           !url.searchParams.has('search') || url.searchParams.get('search') === 'INV-42'
@@ -328,14 +302,11 @@ describe('authenticated operational views', () => {
     await user.click(within(screen.getByText('INV-42').closest('tr')!).getByText('Succeeded'))
     expect(await screen.findByRole('region', { name: 'Document information' })).toBeInTheDocument()
     expect(screen.getByText('Zoho document ID')).toBeInTheDocument()
+    expect(screen.getAllByText('Verified Customer').length).toBeGreaterThan(0)
     expect(screen.getAllByText('CU-42').length).toBeGreaterThan(0)
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/dashboard/documents/invoices/zoho-42',
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
-    )
-    expect(fetchSpy).not.toHaveBeenCalledWith(
-      expect.stringMatching(/^\/api\/dashboard\/invoice\?/),
-      expect.anything(),
     )
 
     queryClient.clear()

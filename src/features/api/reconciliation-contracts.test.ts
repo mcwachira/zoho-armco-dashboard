@@ -114,6 +114,21 @@ describe('persisted reconciliation source resolution', () => {
     ).toBe(supplied)
   })
 
+  it('preserves populated server reconciliation before using device-value fallback', () => {
+    const supplied = {
+      ...calculateReceiptReconciliation(receipt, url),
+      reason: 'Persisted server reconciliation',
+    }
+    expect(
+      resolveReceiptReconciliation({
+        reconciliation: supplied,
+        fiscalizationRequest: {
+          deviceValues: { cuReceiptNumber: 'different', kraQrUrl: url },
+        },
+      }),
+    ).toBe(supplied)
+  })
+
   it.each([
     {
       status: 'MATCH' as const,

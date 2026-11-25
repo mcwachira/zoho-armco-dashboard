@@ -419,6 +419,7 @@ export function ApiDocuments({
                       <th scope="col">CU/KRA reconciliation</th>
                       {reconciliation && <th scope="col">KRA invoice number</th>}
                       {reconciliation && <th scope="col">Verification URL</th>}
+                      {reconciliation && <th scope="col">Fiscalization evidence</th>}
                       <th scope="col">Fiscalized at</th>
                     </tr>
                   </thead>
@@ -491,7 +492,22 @@ export function ApiDocuments({
                               )}
                             </td>
                           )}
-                          <td>{documentDate(row.fiscalizationRequest?.fiscalizedAt, true)}</td>
+                          {reconciliation && (
+                            <td>
+                              <FiscalizationEvidence
+                                kind={kind}
+                                zohoDocumentId={rowId}
+                                summary={row.fiscalizationRequest}
+                              />
+                            </td>
+                          )}
+                          <td>
+                            {documentDate(
+                              row.fiscalizationRequest?.deviceValues?.fiscalizedAt ??
+                                row.fiscalizationRequest?.fiscalizedAt,
+                              true,
+                            )}
+                          </td>
                         </tr>
                       )
                     })}
@@ -588,5 +604,102 @@ export function FiscalizationStatus({
     <span className="badge neutral">Not processed</span>
   ) : (
     <DocumentStatus value={summary?.status} source="fiscal" />
+  )
+}
+
+function FiscalizationEvidence({
+  kind,
+  zohoDocumentId,
+  summary,
+}: {
+  kind: DocumentKind
+  zohoDocumentId: string | undefined
+  summary: ProvisionalFiscalization | null | undefined
+}) {
+  if (!summary) return <span className="document-unavailable">Unavailable</span>
+
+  const requestId = summary.requestId
+  const validRequestId =
+    typeof requestId === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(requestId)
+  const requestHref = validRequestId
+    ? `/requests?${new URLSearchParams({
+        kind,
+        id: requestId,
+      })}`
+    : null
+  const values = summary.deviceValues
+
+  return (
+    <details className="document-reconciliation">
+      <summary>View fiscalization evidence</summary>
+      <dl className="document-fields">
+        <div>
+          <dt>Zoho document ID</dt>
+          <dd>{zohoDocumentId ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>Fiscalization request ID</dt>
+          <dd>
+            {requestHref ? (
+              <Link className="document-number" to={requestHref}>
+                {requestId}
+              </Link>
+            ) : (
+              'Unavailable'
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Execution status</dt>
+          <dd>{summary.executionStatus ?? summary.status ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>Transmission status</dt>
+          <dd>{summary.kraTransmissionStatus ?? values?.kraTransmissionResult ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>CU serial number</dt>
+          <dd>{values?.cuSerialNumber ?? summary.cuSerialNumber ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>CU receipt number</dt>
+          <dd>{values?.cuReceiptNumber ?? summary.cuReceiptNumber ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>KRA fiscalization URL</dt>
+          <dd>
+            {safeVerificationUrl(values?.kraQrUrl ?? summary.kraQrUrl) ? (
+              <a
+                className="document-number"
+                href={safeVerificationUrl(values?.kraQrUrl ?? summary.kraQrUrl)!}
+                target="_blank"
+                rel="noopener noreferrer"
+                referrerPolicy="no-referrer"
+              >
+                Open device verification URL
+              </a>
+            ) : (
+              (values?.kraQrUrl ?? summary.kraQrUrl ?? 'Unavailable')
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt>Attempts</dt>
+          <dd>{summary.attempts?.length ?? 'Unavailable'}</dd>
+        </div>
+        <div>
+          <dt>Last error</dt>
+          <dd>
+            {summary.errorCode || summary.errorMessage
+              ? [summary.errorCode, summary.errorMessage].filter(Boolean).join(': ')
+              : 'Unavailable'}
+          </dd>
+        </div>
+        <div>
+          <dt>Fiscalization time</dt>
+          <dd>{documentDate(values?.fiscalizedAt ?? summary.fiscalizedAt, true)}</dd>
+        </div>
+      </dl>
+    </details>
   )
 }

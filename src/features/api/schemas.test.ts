@@ -427,6 +427,20 @@ describe('verified transaction detail contracts', () => {
     expect(populated.request.etims).not.toBeNull()
     expect(populated.request.writeback).not.toBeNull()
     expect(populated.request.timeline.length).toBeGreaterThan(0)
+
+    const observedMetadata = {
+      ...populated,
+      request: {
+        ...populated.request,
+        snapshot: {
+          present: true,
+          valid: true,
+          version: 1,
+          snapshotId: '5565037800b822c607d28bff3245a67ae29822b5f96ea843fcadef422ae21b1b',
+        },
+      },
+    }
+    expect(dashboardInvoiceDetailSchema.safeParse(observedMetadata).success).toBe(true)
   })
 
   it('rejects the stale invoice-data snapshot projection and unreturned manual-review field', () => {

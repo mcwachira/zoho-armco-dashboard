@@ -329,7 +329,7 @@ const invoiceSnapshotSchema = z
   .object({
     present: z.boolean(),
     valid: z.boolean(),
-    version: z.number().int().nullable(),
+    version: z.number().nullable(),
     snapshotId: nullableText,
   })
   .strict()

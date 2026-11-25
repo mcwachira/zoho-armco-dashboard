@@ -865,6 +865,102 @@ describe('persisted CU/KRA document reconciliation', () => {
         .every((link) => !link.getAttribute('href')?.startsWith('javascript:')),
     ).toBe(true)
   })
+
+  it.each(['invoice', 'credit_note'] as const)(
+    'shows %s source document and fiscalization evidence with separate Zoho and request IDs',
+    async (kind) => {
+      const isInvoice = kind === 'invoice'
+      const document = isInvoice ? invoiceDocumentFixture : creditNoteDocumentFixture
+      const zohoDocumentId = isInvoice
+        ? invoiceDocumentFixture.invoice_id
+        : creditNoteDocumentFixture.creditnote_id
+      const number = isInvoice
+        ? invoiceDocumentFixture.invoice_number
+        : creditNoteDocumentFixture.creditnote_number
+      const requestId = `internal-${kind}-request-42`
+      const url = 'https://verify.example.test/?invoiceNo=000REC-42'
+      const fiscalizationRequest = {
+        ...fiscalizationFixture,
+        requestId,
+        status: 'Succeeded',
+        executionStatus: 'Succeeded',
+        kraTransmissionStatus: 'TRANSMISSION_CONFIRMED',
+        fiscalizedAt: '2026-11-24T12:00:00.000Z',
+        attempts: [{ attemptNumber: 1, status: 'Succeeded' }],
+        deviceValues: {
+          cuSerialNumber: 'CU-SERIAL-FIXTURE',
+          cuReceiptNumber: '000REC-42',
+          kraQrUrl: url,
+          fiscalizedAt: '2026-11-24T12:00:00.000Z',
+          kraTransmissionResult: 'Accepted',
+        },
+      }
+      const fetch = vi
+        .fn()
+        .mockResolvedValue(
+          Response.json(documentPageFixture([{ ...document, fiscalizationRequest }])),
+        )
+
+      await renderDocuments(kind, `/reconciliation?kind=${kind}`, fetch, true)
+
+      const sourceLink = await screen.findByRole('link', { name: number })
+      expect(sourceLink).toHaveAttribute(
+        'href',
+        `/reconciliation?kind=${kind}&id=${zohoDocumentId}`,
+      )
+      const table = screen.getByRole('region', {
+        name: isInvoice ? 'Invoice table' : 'Credit-note table',
+      })
+      expect(within(table).getAllByText('000REC-42').length).toBeGreaterThan(0)
+      expect(within(table).getByRole('link', { name: 'Open KRA verification' })).toHaveAttribute(
+        'href',
+        url,
+      )
+
+      await userEvent.click(within(table).getByText('View fiscalization evidence'))
+      expect(within(table).getByText('Zoho document ID').nextElementSibling).toHaveTextContent(
+        zohoDocumentId,
+      )
+      expect(within(table).getByRole('link', { name: requestId })).toHaveAttribute(
+        'href',
+        `/requests?kind=${kind}&id=${requestId}`,
+      )
+      expect(within(table).getByText('CU receipt number').nextElementSibling).toHaveTextContent(
+        '000REC-42',
+      )
+      expect(within(table).getByText('CU serial number').nextElementSibling).toHaveTextContent(
+        'CU-SERIAL-FIXTURE',
+      )
+      expect(within(table).getByText('Attempts').nextElementSibling).toHaveTextContent('1')
+      expect(fetch).toHaveBeenCalledWith(
+        `/api/dashboard/documents/${isInvoice ? 'invoices' : 'credit-notes'}?page=1&pageSize=25`,
+        expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+      )
+    },
+  )
+
+  it('shows unavailable fiscalization evidence without filling missing values', async () => {
+    const fetch = vi
+      .fn()
+      .mockResolvedValue(
+        Response.json(
+          documentPageFixture([{ ...invoiceDocumentFixture, fiscalizationRequest: {} }]),
+        ),
+      )
+    await renderDocuments('invoice', '/reconciliation?kind=invoice', fetch, true)
+    await screen.findByText('View fiscalization evidence')
+    const table = screen.getByRole('region', { name: 'Invoice table' })
+    await userEvent.click(within(table).getByText('View fiscalization evidence'))
+    expect(within(table).getByText('CU receipt number').nextElementSibling).toHaveTextContent(
+      'Unavailable',
+    )
+    expect(
+      within(table).getByText('Fiscalization request ID').nextElementSibling,
+    ).toHaveTextContent('Unavailable')
+    expect(
+      within(table).queryByRole('link', { name: 'Open KRA verification' }),
+    ).not.toBeInTheDocument()
+  })
 })
 
 describe('rich persisted document evidence', () => {

@@ -178,6 +178,7 @@ export async function handleDashboardRequest(
   dependencies: GatewayDependencies = defaultDependencies,
 ) {
   let requestId = randomUUID() as string
+  const dashboardRequestId = requestId
   const reply = (
     status: number,
     code: string,
@@ -386,14 +387,50 @@ export async function handleDashboardRequest(
       )
     }
     const parsed = schema.safeParse(payload)
-    if (!parsed.success)
+    if (!parsed.success) {
+      const isInvoiceRequestDetailFailure =
+        definition.requestDetail === 'invoice' && resource === 'invoice'
+      if (isInvoiceRequestDetailFailure) {
+        // TEMP incident diagnostic. Remove after the deployed snapshot contract is confirmed.
+        const root = payload !== null && typeof payload === 'object' ? payload : undefined
+        const requestValue = root && 'request' in root ? root.request : undefined
+        const request =
+          requestValue !== null && typeof requestValue === 'object'
+            ? (requestValue as Record<string, unknown>)
+            : undefined
+        const snapshotExists = Boolean(
+          request && Object.prototype.hasOwnProperty.call(request, 'snapshot'),
+        )
+        const snapshot = snapshotExists ? request?.['snapshot'] : undefined
+        const snapshotProperties =
+          snapshot !== null && typeof snapshot === 'object' && !Array.isArray(snapshot)
+            ? Object.fromEntries(
+                Object.entries(snapshot).map(([name, value]) => [
+                  name,
+                  {
+                    type: value === null ? 'null' : Array.isArray(value) ? 'array' : typeof value,
+                    isNull: value === null,
+                  },
+                ]),
+              )
+            : {}
+        console.error('dashboard_invoice_request_snapshot_contract_diagnostic', {
+          dashboardRequestId,
+          fiscalizationRequestId: documentId,
+          snapshotExists,
+          snapshotProperties,
+        })
+      }
       return reply(
         502,
         'UPSTREAM_CONTRACT_ERROR',
         'The middleware response did not match the dashboard contract.',
         undefined,
-        validationDiagnostics(payload, parsed.error.issues),
+        isInvoiceRequestDetailFailure
+          ? undefined
+          : validationDiagnostics(payload, parsed.error.issues),
       )
+    }
     if (definition.requestDetail) {
       const detail = parsed.data as { request: { requestId: string; documentType: string } }
       if (
