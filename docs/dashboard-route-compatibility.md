@@ -6,22 +6,25 @@ detail and the two manual-review reads below exist and are allowlisted. The BFF
 preserves its configured Gateway namespace and strictly validates their
 response contracts. Other route mappings remain unchanged.
 
-| Resource                  | Previous upstream configuration         | Prepared canonical path   | Response mapping status                                                                  |
-| ------------------------- | --------------------------------------- | ------------------------- | ---------------------------------------------------------------------------------------- |
-| Overview                  | `/api/dashboard/overview`               | `/overview`               | Existing strict schema; fresh sample pending                                             |
-| Invoice history           | `/api/dashboard/invoices`               | `/invoices`               | Existing strict history schema; fresh sample pending                                     |
-| Credit-note history       | `/api/dashboard/credit-notes`           | `/credit-notes`           | Existing strict history schema; fresh sample pending                                     |
-| Full invoice register     | `/api/dashboard/documents/invoices`     | `/documents/invoices`     | Existing provisional projection; availability/sample pending                             |
-| Full credit-note register | `/api/dashboard/documents/credit-notes` | `/documents/credit-notes` | Existing provisional projection; availability/sample pending                             |
-| Writeback                 | Locally disabled                        | `/writebacks`             | Existing documented strict schema enabled; actual compatibility pending                  |
-| Invoice request detail    | Previously contract gated               | `/invoices/{requestId}`   | Enabled for internal fiscalization request ID; strict detail DTO and identity validation |
-| Manual-review collection  | Previously gateway gated                | `/manual-review`          | Enabled; page/pageSize/status and strict summary-row DTO                                 |
-| Manual-review case detail | Previously gateway gated                | `/manual-review/{caseId}` | Enabled; direct strict case DTO with supporting attempts and identity validation         |
-| Reconciliation            | Locally disabled                        | `/reconciliation`         | Configured; missing actual row DTO blocks forwarding                                     |
-| Events                    | Locally disabled                        | `/events`                 | Configured; missing actual row DTO blocks forwarding                                     |
-| Pending operations        | Locally disabled                        | `/operations`             | Configured; missing actual row DTO blocks forwarding                                     |
-| Services                  | `/api/dashboard/services`               | `/services`               | Existing limited service schema; fresh sample pending                                    |
-| Device projection         | Locally disabled                        | `/device`                 | Existing strict projection enabled; actual compatibility pending                         |
+| Resource                    | Previous upstream configuration            | Prepared canonical path        | Response mapping status                                                                    |
+| --------------------------- | ------------------------------------------ | ------------------------------ | ------------------------------------------------------------------------------------------ |
+| Overview                    | `/api/dashboard/overview`                  | `/overview`                    | Existing strict schema; fresh sample pending                                               |
+| Invoice history             | `/api/dashboard/invoices`                  | `/invoices`                    | Existing strict history schema; fresh sample pending                                       |
+| Credit-note history         | `/api/dashboard/credit-notes`              | `/credit-notes`                | Existing strict history schema; fresh sample pending                                       |
+| Full invoice register       | `/api/dashboard/documents/invoices`        | `/documents/invoices`          | Existing authenticated BFF projection; nested source fields remain allowlisted             |
+| Invoice document detail     | `/api/dashboard/documents/invoice?id=`     | `/documents/invoices/{id}`     | Enabled; Zoho document ID, response identity checked and projected through document schema |
+| Full credit-note register   | `/api/dashboard/documents/credit-notes`    | `/documents/credit-notes`      | Existing authenticated BFF projection; nested source fields remain allowlisted             |
+| Credit-note document detail | `/api/dashboard/documents/credit-note?id=` | `/documents/credit-notes/{id}` | Enabled; Zoho document ID, response identity checked and projected through document schema |
+| Writeback                   | Locally disabled                           | `/writebacks`                  | Existing documented strict schema enabled; actual compatibility pending                    |
+| Invoice request detail      | Previously contract gated                  | `/invoices/{requestId}`        | Enabled for internal fiscalization request ID; strict detail DTO and identity validation   |
+| Credit-note request detail  | Previously contract gated                  | `/credit-notes/{requestId}`    | Enabled for internal fiscalization request ID; strict detail DTO and identity validation   |
+| Manual-review collection    | Previously gateway gated                   | `/manual-review`               | Enabled; page/pageSize/status and strict summary-row DTO                                   |
+| Manual-review case detail   | Previously gateway gated                   | `/manual-review/{caseId}`      | Enabled; direct strict case DTO with supporting attempts and identity validation           |
+| Reconciliation              | Locally disabled                           | `/reconciliation`              | Configured; missing actual row DTO blocks forwarding                                       |
+| Events                      | Locally disabled                           | `/events`                      | Enabled with paginated strict event DTO and validated JSON metadata                        |
+| Pending operations          | Locally disabled                           | `/operations`                  | Configured; missing actual row DTO blocks forwarding                                       |
+| Services                    | `/api/dashboard/services`                  | `/services`                    | Existing limited service schema; fresh sample pending                                      |
+| Device projection           | Locally disabled                           | `/device`                      | Existing strict projection enabled; actual compatibility pending                           |
 
 ## Fresh live namespace discrepancy
 
@@ -46,10 +49,14 @@ fallbacks that retry alternate namespaces and conceal configuration mistakes.
 
 ## Remaining detail routes and unsupported aliases
 
-Invoice request detail maps the browser-supplied internal fiscalization
-request ID to `/invoices/{requestId}`. Credit-note request detail and source
-document detail templates remain locally blocked pending their own verified
-contracts. Synthetic tests do not activate those routes.
+Invoice and credit-note request detail map the browser-supplied internal
+fiscalization request ID to their corresponding `/invoices/{requestId}` and
+`/credit-notes/{requestId}` routes. Both retain strict DTO and identity
+validation. Source document detail maps the Zoho document ID to its
+document-specific Gateway path, validates the response envelope and matching
+document identity, then strips fields outside the existing allowlisted
+projection. Route forwarding and UI behavior are covered with synthetic tests;
+authenticated live source responses were not exercised in this dashboard task.
 
 No `/monitoring`, `/system-health`, `/fiscalization-requests` or queue-depth route
 was created. Monitoring reuses Overview; health uses scoped Services; invoice

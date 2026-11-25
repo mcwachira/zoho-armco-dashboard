@@ -64,17 +64,19 @@ fiscalizationRequest alone means "Not processed"; an absent summary does not.
 
 ## Four API integrations
 
-| Existing dashboard GET                     | Existing upstream mapping                | Local mocked verification                                      | Authenticated live result                               |
-| ------------------------------------------ | ---------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------- |
-| /api/dashboard/documents/invoices          | /api/dashboard/documents/invoices        | List envelope, projection, filters, pagination and auth tested | Not tested: no upstream credentials                     |
-| /api/dashboard/documents/invoice?id=ID     | /api/dashboard/documents/invoices/ID     | Detail envelope, encoded ID, identity and auth tested          | Not tested: no upstream credentials or real document ID |
-| /api/dashboard/documents/credit-notes      | /api/dashboard/documents/credit-notes    | List envelope, projection, filters, pagination and auth tested | Not tested: no upstream credentials                     |
-| /api/dashboard/documents/credit-note?id=ID | /api/dashboard/documents/credit-notes/ID | Detail envelope, encoded ID, identity and auth tested          | Not tested: no upstream credentials or real document ID |
+| Existing dashboard GET                   | Existing upstream mapping                | Local mocked verification                                      | Authenticated live result                    |
+| ---------------------------------------- | ---------------------------------------- | -------------------------------------------------------------- | -------------------------------------------- |
+| /api/dashboard/documents/invoices        | /api/dashboard/documents/invoices        | List envelope, projection, filters, pagination and auth tested | Not tested: no upstream credentials          |
+| /api/dashboard/documents/invoices/ID     | /api/dashboard/documents/invoices/ID     | Detail envelope, bounded ID, identity and auth tested          | Not tested: no upstream request in this task |
+| /api/dashboard/documents/credit-notes    | /api/dashboard/documents/credit-notes    | List envelope, projection, filters, pagination and auth tested | Not tested: no upstream credentials          |
+| /api/dashboard/documents/credit-notes/ID | /api/dashboard/documents/credit-notes/ID | Detail envelope, bounded ID, identity and auth tested          | Not tested: no upstream request in this task |
 
 All mappings reuse DASHBOARD_UPSTREAM_BASE_URL, DASHBOARD_UPSTREAM_TOKEN and
 the existing signed-session/current-allowlist check. Detail aliases preserve
-existing Vercel routing and encode exactly one bounded ID segment. List query
-parameters remain validated and forwarded. GET-only behavior, hostname/origin
+existing Vercel routing and forward exactly one bounded ID segment through dynamic rewrites. List query
+parameters remain validated and forwarded. The BFF accepts the configured public
+HTTPS gateway hostname under its existing origin validation; no hostname validation
+was removed or loosened. GET-only behavior, hostname/origin
 validation, redirect rejection, secret checks, timeout, response-size bounds,
 request IDs and safe upstream errors remain in place.
 
