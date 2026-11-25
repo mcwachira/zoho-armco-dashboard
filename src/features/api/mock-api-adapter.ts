@@ -21,6 +21,7 @@ import {
   mockInvoiceDetails,
   mockInvoices,
   mockManualReview,
+  mockManualReviewCase,
   mockOverview,
   mockReconciliation,
   mockServiceHealth,
@@ -129,16 +130,20 @@ function mockResponse(path: string): unknown {
   if (route === '/api/dashboard/manual-review') {
     const query = parsePageQuery(url)
     const offset = (query.page - 1) * query.pageSize
-    const reviewItems = mockManualReview.availability === 'partial' ? mockManualReview.items : []
+    const reviewItems = mockManualReview.items.filter(
+      (item) => !url.searchParams.has('status') || item.status === url.searchParams.get('status'),
+    )
     const items = reviewItems.slice(offset, offset + query.pageSize)
     return {
-      availability: 'partial',
       page: query.page,
       pageSize: query.pageSize,
-      total: null,
-      hasMore: offset + items.length < reviewItems.length,
+      total: reviewItems.length,
       items,
     }
+  }
+  if (route === '/api/dashboard/manual-review-case') {
+    const caseId = url.searchParams.get('id')
+    return mockManualReviewCase.id === caseId ? mockManualReviewCase : undefined
   }
   if (route === '/api/dashboard/reconciliation') return mockReconciliation
   if (route === '/api/dashboard/device') return mockDeviceDiagnostics

@@ -15,6 +15,7 @@ import {
   dashboardInvoiceDetailSchema,
   dashboardManualReviewQueryParamsSchema,
   dashboardManualReviewSchema,
+  manualReviewCaseResponseSchema,
   dashboardOverviewSchema,
   dashboardReconciliationSchema,
   dashboardWritebacksUnavailableSchema,
@@ -58,8 +59,6 @@ export interface DashboardManualReviewParams {
   page?: number
   pageSize?: number
   status?: 'open' | 'resolved'
-  createdFrom?: string
-  createdTo?: string
 }
 
 const polling = {
@@ -239,6 +238,16 @@ export function useDashboardManualReviewQuery(
     () => buildDashboardManualReviewPath(query),
     dashboardManualReviewSchema,
     enabled,
+  )
+}
+
+export function useDashboardManualReviewCaseQuery(caseId: string, enabled = true) {
+  const params = caseId ? { id: caseId } : undefined
+  return useDashboardRead(
+    apiQueryKeys.manualReviewByCase(caseId),
+    () => `/api/dashboard/manual-review-case${toQueryString(params ?? {})}`,
+    manualReviewCaseResponseSchema,
+    enabled && Boolean(caseId),
   )
 }
 

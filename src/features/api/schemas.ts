@@ -278,17 +278,8 @@ export const dashboardManualReviewQueryParamsSchema = z
     page: z.number().int().min(1).max(100).default(1),
     pageSize: z.number().int().min(1).max(100).default(25),
     status: z.enum(['open', 'resolved']).optional(),
-    createdFrom: z.string().datetime({ offset: true }).optional(),
-    createdTo: z.string().datetime({ offset: true }).optional(),
   })
   .strict()
-  .refine(
-    (value) =>
-      !value.createdFrom ||
-      !value.createdTo ||
-      Date.parse(value.createdFrom) <= Date.parse(value.createdTo),
-    { message: 'Date range must be ordered.', path: ['createdTo'] },
-  )
 
 export const dashboardOverviewQueryParamsSchema = z
   .object({
@@ -336,30 +327,34 @@ const nullableText = z.string().nullable()
 
 const invoiceSnapshotSchema = z
   .object({
-    invoice: z
-      .object({
-        invoiceNumber: nullableText,
-        date: nullableText,
-        currency: z.string(),
-        subtotal: z.string(),
-        taxTotal: z.string(),
-        total: z.string(),
-        lines: z.array(
-          z
-            .object({
-              description: nullableText,
-              itemName: nullableText,
-              quantity: z.string(),
-              unitPrice: z.string(),
-              lineTotal: z.string(),
-            })
-            .strict(),
-        ),
-      })
-      .strict(),
+    invoiceNumber: nullableText,
+    date: nullableText,
+    currency: z.string(),
+    subtotal: z.string(),
+    taxTotal: z.string(),
+    total: z.string(),
+    lines: z.array(
+      z
+        .object({
+          description: nullableText,
+          itemName: nullableText,
+          quantity: z.string(),
+          unitPrice: z.string(),
+          lineTotal: z.string(),
+        })
+        .strict(),
+    ),
   })
   .strict()
   .nullable()
+
+const invoiceDetailWritebackStatusSchema = z.enum([
+  'not_attempted',
+  'in_progress',
+  'succeeded',
+  'failed',
+  'outcome_unknown',
+])
 
 const dashboardAttemptSchema = z
   .object({
@@ -441,7 +436,7 @@ const invoiceManualReviewDetailSchema = z
 
 const invoiceEtimsDetailSchema = z
   .object({
-    status: z.string(),
+    status: invoiceReconciliationStatusSchema,
     reconciliationRequired: z.boolean(),
     attempts: z.array(
       z
@@ -470,14 +465,17 @@ const invoiceTimelineEventSchema = z
 export const dashboardInvoiceDetailSchema = z
   .object({
     request: dashboardInvoiceItemSchema
+      .omit({ writebackStatus: true, lastError: true })
       .extend({
+        writebackStatus: invoiceDetailWritebackStatusSchema,
+        lastError: z.object({ code: z.string(), message: z.string() }).strict().nullable(),
         snapshot: invoiceSnapshotSchema,
         attempts: z.array(dashboardAttemptSchema),
         evidence: invoiceEvidenceSchema.nullable(),
         etims: invoiceEtimsDetailSchema,
         writeback: invoiceWritebackDetailSchema,
         manualReview: invoiceManualReviewDetailSchema,
-        timeline: z.array(invoiceTimelineEventSchema),
+        timeline: z.array(invoiceTimelineEventSchema).min(1),
       })
       .strict(),
   })
@@ -673,46 +671,74 @@ export const dashboardUnavailableSchema = z
   .object({ availability: z.literal('unavailable'), reason: z.string() })
   .strict()
 
-export const dashboardManualReviewItemSchema = z
+const manualReviewDecisionSchema = z
   .object({
-    caseId: z.string(),
+    id: z.string(),
+    sequence: z.number().int(),
+    requestedOutcome: z.string(),
+    resolution: z.string(),
+    reason: z.string().nullable(),
+    evidenceReference: z.string().nullable(),
+    recordedAt: dashboardTimestampSchema,
+  })
+  .strict()
+
+export const manualReviewSummaryItemSchema = z
+  .object({
+    id: z.string(),
     requestId: z.string(),
+    documentId: z.string(),
     operationId: z.string(),
+    documentType: z.literal('invoice'),
     relatedAttemptIds: z.array(z.string()),
     observedState: z.string(),
-    reason: z.string(),
+    status: z.string(),
+    reason: z.string().nullable(),
+    createdAt: dashboardTimestampSchema,
+    updatedAt: dashboardTimestampSchema,
+    resolvedAt: dashboardTimestampSchema.nullable(),
+    decisions: z.array(manualReviewDecisionSchema),
+  })
+  .strict()
+
+const manualReviewSupportingAttemptSchema = z
+  .object({
+    attemptNumber: z.number().int(),
+    outcome: z.enum(['succeeded', 'failed', 'outcome_unknown']).nullable(),
+    startedAt: dashboardTimestampSchema,
+    completedAt: dashboardTimestampSchema.nullable(),
+    errorCode: z.string().nullable(),
+    errorMessage: z.string().nullable(),
+  })
+  .strict()
+
+export const manualReviewCaseSchema = z
+  .object({
+    id: z.string(),
+    documentType: z.literal('invoice'),
+    requestId: z.string(),
+    documentId: z.string(),
+    operationId: z.string(),
+    observedState: z.string(),
+    reason: z.string().nullable(),
     status: z.string(),
     createdAt: dashboardTimestampSchema,
     updatedAt: dashboardTimestampSchema,
-    decisions: z.array(
-      z
-        .object({
-          sequence: z.number().int(),
-          requestedOutcome: z.string(),
-          resolution: z.string(),
-          reason: z.string(),
-          recordedAt: dashboardTimestampSchema,
-        })
-        .strict(),
-    ),
+    resolvedAt: dashboardTimestampSchema.nullable(),
+    supportingAttempts: z.array(manualReviewSupportingAttemptSchema),
+    decisions: z.array(manualReviewDecisionSchema),
   })
   .strict()
 
-export const dashboardManualReviewPartialSchema = z
+/** Persisted middleware manual-review collection contract. */
+export const dashboardManualReviewSchema = z
   .object({
-    availability: z.literal('partial'),
     page: z.number().int().positive(),
-    pageSize: z.number().int().positive().max(100),
-    total: z.null(),
-    hasMore: z.boolean(),
-    items: z.array(dashboardManualReviewItemSchema),
+    pageSize: z.number().int().positive(),
+    total: z.number().int().nonnegative(),
+    items: z.array(manualReviewSummaryItemSchema),
   })
   .strict()
-
-export const dashboardManualReviewSchema = z.discriminatedUnion('availability', [
-  dashboardUnavailableSchema,
-  dashboardManualReviewPartialSchema,
-])
 
 export const dashboardReconciliationSchema = z
   .object({
@@ -823,47 +849,15 @@ export const dashboardServiceHealthSchema = z
 
 export const dashboardWritebacksUnavailableSchema = dashboardUnavailableSchema
 
-export const manualReviewCaseSchema = z.object({
-  id: z.string(),
-  fiscalizationRequestId: z.string(),
-  operationId: z.string(),
-  relatedAttemptIds: z.array(z.string()),
-  observedState: z.string(),
-  reason: z.string(),
-  initiatingOperatorSubject: z.string(),
-  resolvingOperatorSubject: z.string().nullable(),
-  resolvedAt: z.string().datetime({ offset: true }).nullable(),
-  status: z.enum(['open', 'resolved']),
-  createdAt: z.string().datetime({ offset: true }),
-  updatedAt: z.string().datetime({ offset: true }),
-  decisions: z.array(
-    z.object({
-      id: z.string(),
-      caseId: z.string(),
-      sequence: z.number().int(),
-      operatorSubject: z.string(),
-      requestedOutcome: z.enum(['confirmed_success', 'confirmed_failure', 'still_unknown']),
-      resolution: z.enum(['confirmed', 'still_unknown', 'invalid_evidence']),
-      reason: z.string(),
-      evidenceReference: z.string().nullable(),
-      recordedAt: z.string().datetime({ offset: true }),
-    }),
-  ),
-})
+export const manualReviewCaseResponseSchema = manualReviewCaseSchema
 
-export const manualReviewCaseResponseSchema = z.object({
-  reviewCase: manualReviewCaseSchema,
-})
+export const manualReviewByRequestResponseSchema = z
+  .object({
+    reviewCase: manualReviewCaseSchema.nullable(),
+  })
+  .strict()
 
-export const manualReviewByRequestResponseSchema = z.object({
-  reviewCase: manualReviewCaseSchema.nullable(),
-})
-
-export const manualReviewCasesPageSchema = z.object({
-  cases: z.array(manualReviewCaseSchema),
-  limit: z.number().int().min(1).max(100),
-  offset: z.number().int().nonnegative(),
-})
+export const manualReviewCasesPageSchema = dashboardManualReviewSchema
 
 const jobHealthSchema = z
   .object({
@@ -944,6 +938,7 @@ export type DashboardCreditNoteDetail = z.infer<typeof dashboardCreditNoteDetail
 export type DashboardCapabilities = z.infer<typeof dashboardCapabilitiesSchema>
 export type DashboardOverview = z.infer<typeof dashboardOverviewSchema>
 export type DashboardManualReview = z.infer<typeof dashboardManualReviewSchema>
+export type ManualReviewSummaryItem = z.infer<typeof manualReviewSummaryItemSchema>
 export type DashboardReconciliation = z.infer<typeof dashboardReconciliationSchema>
 export type DashboardDeviceDiagnostics = z.infer<typeof dashboardDeviceDiagnosticsSchema>
 export type DashboardServiceHealth = z.infer<typeof dashboardServiceHealthSchema>

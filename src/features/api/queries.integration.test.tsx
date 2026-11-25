@@ -114,22 +114,15 @@ describe('dashboard API query hooks', () => {
     queryClient.clear()
   })
 
-  it('preserves manual-review gateway failures instead of fabricating a successful unavailable response', async () => {
+  it('loads a validated persisted manual-review page through the same-origin API', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
-    const fetchSpy = vi.fn().mockImplementation(() =>
-      Promise.resolve(
-        new Response(
-          JSON.stringify({
-            error: {
-              code: 'CONTRACT_SCHEMA_UNAVAILABLE',
-              message: 'The record DTO is not specified.',
-            },
-          }),
-          { status: 503 },
-        ),
-      ),
-    )
+    const { mockManualReview } = await import('./mock-api-fixtures')
+    const fetchSpy = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(JSON.stringify({ ...mockManualReview, pageSize: 100 }), { status: 200 }),
+      )
     vi.stubGlobal('fetch', fetchSpy)
     const { useDashboardManualReviewQuery } = await import('./queries')
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -139,9 +132,8 @@ describe('dashboard API query hooks', () => {
         wrapper: createQueryWrapper(queryClient),
       },
     )
-    await waitFor(() => expect(result.current.isError).toBe(true), { timeout: 5000 })
-    expect(result.current.data).toBeUndefined()
-    expect(result.current.error).toMatchObject({ status: 503, code: 'CONTRACT_SCHEMA_UNAVAILABLE' })
+    await waitFor(() => expect(result.current.isSuccess).toBe(true), { timeout: 5000 })
+    expect(result.current.data).toMatchObject({ page: 1, pageSize: 100, total: 1 })
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/dashboard/manual-review?page=1&pageSize=100',
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),

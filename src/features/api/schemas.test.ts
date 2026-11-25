@@ -6,11 +6,19 @@ import {
   dashboardDeviceDiagnosticsSchema,
   dashboardInvoicePageSchema,
   dashboardInvoiceDetailSchema,
+  dashboardManualReviewSchema,
+  manualReviewCaseResponseSchema,
   dashboardOverviewSchema,
   dashboardServiceHealthSchema,
   deviceHealthSchema,
   readinessSchema,
 } from './schemas'
+import {
+  mockInvoiceDetails,
+  mockInvoices,
+  mockManualReview,
+  mockManualReviewCase,
+} from './mock-api-fixtures'
 
 describe('verified health response contracts', () => {
   it('accepts only the documented readiness statuses', () => {
@@ -352,7 +360,7 @@ describe('verified dashboard availability contracts', () => {
 })
 
 describe('verified transaction detail contracts', () => {
-  it('accepts invoice details only with explicit evidence and timeline fields', () => {
+  it('accepts invoice details with required nullable values and a nonempty timeline', () => {
     expect(
       dashboardInvoiceDetailSchema.safeParse({
         request: {
@@ -392,6 +400,84 @@ describe('verified transaction detail contracts', () => {
         },
       }).success,
     ).toBe(true)
+
+    const missingRequired = Object.fromEntries(
+      Object.entries(Object.values(mockInvoiceDetails)[0]!.request).filter(
+        ([key]) => key !== 'zohoDocumentId',
+      ),
+    )
+    expect(dashboardInvoiceDetailSchema.safeParse({ request: missingRequired }).success).toBe(false)
+    expect(
+      dashboardInvoiceDetailSchema.safeParse({
+        request: { ...Object.values(mockInvoiceDetails)[0]!.request, timeline: [] },
+      }).success,
+    ).toBe(false)
+  })
+
+  it('accepts populated invoice snapshot, attempts, receipt evidence, eTIMS and writeback', () => {
+    const populated = mockInvoiceDetails[mockInvoices[0]!.requestId]!
+    expect(dashboardInvoiceDetailSchema.safeParse(populated).success).toBe(true)
+    expect(populated.request.snapshot).toMatchObject({
+      invoiceNumber: expect.any(String),
+      lines: [expect.objectContaining({ description: expect.any(String) })],
+    })
+    expect(populated.request.attempts).not.toHaveLength(0)
+    expect(populated.request.evidence).not.toBeNull()
+    expect(populated.request.etims).not.toBeNull()
+    expect(populated.request.writeback).not.toBeNull()
+    expect(populated.request.timeline.length).toBeGreaterThan(0)
+  })
+
+  it('validates manual-review summary rows separately from direct case-detail DTOs', () => {
+    expect(dashboardManualReviewSchema.safeParse(mockManualReview).success).toBe(true)
+    const summary = mockManualReview.items[0]!
+    expect('supportingAttempts' in summary).toBe(false)
+    expect(
+      dashboardManualReviewSchema.safeParse({
+        ...mockManualReview,
+        items: [
+          {
+            ...summary,
+            status: 'new-persisted-status',
+            observedState: 'new-persisted-state',
+            reason: null,
+            decisions: [
+              {
+                ...summary.decisions[0]!,
+                requestedOutcome: 'future-outcome',
+                resolution: 'future-resolution',
+                reason: null,
+              },
+            ],
+          },
+        ],
+      }).success,
+    ).toBe(true)
+    expect(
+      dashboardManualReviewSchema.safeParse({
+        ...mockManualReview,
+        items: [{ ...summary, supportingAttempts: [] }],
+      }).success,
+    ).toBe(false)
+
+    expect(manualReviewCaseResponseSchema.safeParse(mockManualReviewCase).success).toBe(true)
+    expect('relatedAttemptIds' in mockManualReviewCase).toBe(false)
+    expect(
+      manualReviewCaseResponseSchema.safeParse({
+        ...mockManualReviewCase,
+        reason: null,
+        supportingAttempts: [],
+      }).success,
+    ).toBe(true)
+    expect(
+      manualReviewCaseResponseSchema.safeParse({ reviewCase: mockManualReviewCase }).success,
+    ).toBe(false)
+    expect(mockManualReviewCase.supportingAttempts).toHaveLength(1)
+    expect(mockManualReviewCase.decisions[0]).toMatchObject({
+      reason: null,
+      evidenceReference: null,
+      recordedAt: expect.any(String),
+    })
   })
 
   it('accepts confirmed credit-note evidence when the persisted CU serial is unavailable', () => {

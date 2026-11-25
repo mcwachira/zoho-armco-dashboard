@@ -145,24 +145,23 @@ export const mockCreditNotes: DashboardCreditNoteItem[] = [
 const succeededInvoiceDetail: DashboardInvoiceDetail = {
   request: {
     ...mockInvoices[0]!,
+    writebackStatus: 'succeeded',
     snapshot: {
-      invoice: {
-        invoiceNumber: 'DEMO-INV-1001',
-        date: today(),
-        currency: 'KES',
-        subtotal: '159051.72',
-        taxTotal: '25448.28',
-        total: '184500.00',
-        lines: [
-          {
-            description: 'Sample office equipment',
-            itemName: 'Sample office equipment',
-            quantity: '1',
-            unitPrice: '159051.72',
-            lineTotal: '159051.72',
-          },
-        ],
-      },
+      invoiceNumber: 'DEMO-INV-1001',
+      date: today(),
+      currency: 'KES',
+      subtotal: '159051.72',
+      taxTotal: '25448.28',
+      total: '184500.00',
+      lines: [
+        {
+          description: 'Sample office equipment',
+          itemName: 'Sample office equipment',
+          quantity: '1',
+          unitPrice: '159051.72',
+          lineTotal: '159051.72',
+        },
+      ],
     },
     attempts: [
       {
@@ -196,7 +195,20 @@ const succeededInvoiceDetail: DashboardInvoiceDetail = {
         transmissionStatus: 'successful_g03_receipt',
       },
     },
-    etims: null,
+    etims: {
+      status: 'accepted',
+      reconciliationRequired: false,
+      attempts: [
+        {
+          attemptNumber: 1,
+          attemptType: 'report_invoice',
+          outcome: 'accepted',
+          startedAt: ago(28),
+          completedAt: ago(28),
+          errorCategory: null,
+        },
+      ],
+    },
     writeback: {
       status: 'succeeded',
       writtenCustomFieldIds: ['demo-field-1'],
@@ -268,6 +280,7 @@ export const mockInvoiceDetails: Record<string, DashboardInvoiceDetail> = {
   [mockInvoices[1]!.requestId]: {
     request: {
       ...mockInvoices[1]!,
+      writebackStatus: 'not_attempted',
       snapshot: null,
       attempts: [],
       evidence: null,
@@ -282,6 +295,7 @@ export const mockInvoiceDetails: Record<string, DashboardInvoiceDetail> = {
   [mockInvoices[2]!.requestId]: {
     request: {
       ...mockInvoices[2]!,
+      writebackStatus: 'in_progress',
       snapshot: null,
       attempts: [],
       evidence: null,
@@ -404,25 +418,61 @@ export const mockOverview = (createdFrom: string, createdTo: string): DashboardO
 }
 
 export const mockManualReview: DashboardManualReview = {
-  availability: 'partial',
   page: 1,
   pageSize: 25,
-  total: null,
-  hasMore: false,
+  total: 1,
   items: [
     {
-      caseId: 'demo-review-1',
-      requestId: 'demo-credit-note-2002',
+      id: 'demo-review-1',
+      requestId: mockInvoices[1]!.requestId,
+      documentId: mockInvoices[1]!.zohoDocumentId,
       operationId: 'demo-operation-2002',
+      documentType: 'invoice',
       relatedAttemptIds: ['demo-attempt-2002-1'],
       observedState: 'MANUAL_REVIEW_REQUIRED',
       reason: 'DEMO ONLY: sample evidence requires operator review.',
       status: 'open',
       createdAt: ago(219),
       updatedAt: ago(214),
-      decisions: [],
+      resolvedAt: null,
+      decisions: [
+        {
+          id: 'demo-review-decision-1',
+          requestedOutcome: 'still_unknown',
+          resolution: 'still_unknown',
+          sequence: 1,
+          reason: null,
+          evidenceReference: null,
+          recordedAt: ago(214),
+        },
+      ],
     },
   ],
+}
+
+export const mockManualReviewCase = {
+  id: 'demo-review-1',
+  documentType: 'invoice' as const,
+  requestId: mockInvoices[1]!.requestId,
+  documentId: mockInvoices[1]!.zohoDocumentId,
+  operationId: 'demo-operation-2002',
+  observedState: 'MANUAL_REVIEW_REQUIRED',
+  reason: 'DEMO ONLY: sample evidence requires operator review.',
+  status: 'open',
+  createdAt: ago(219),
+  updatedAt: ago(214),
+  resolvedAt: null,
+  supportingAttempts: [
+    {
+      attemptNumber: 1,
+      outcome: 'outcome_unknown' as const,
+      startedAt: ago(219),
+      completedAt: null,
+      errorCode: 'DEMO_UNCERTAIN',
+      errorMessage: 'Fictional sample attempt result.',
+    },
+  ],
+  decisions: mockManualReview.items[0]!.decisions,
 }
 
 export const mockReconciliation: DashboardReconciliation = {
