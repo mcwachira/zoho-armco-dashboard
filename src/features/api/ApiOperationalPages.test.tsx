@@ -68,7 +68,13 @@ describe('authenticated operational views', () => {
             customer_name: note.customerName,
             line_items: [],
           },
-          fiscalizationRequest: null,
+          fiscalizationRequest: {
+            requestId: note.requestId,
+            status: note.fiscalizationStatus,
+            cuReceiptNumber: note.receiptNumber,
+            kraQrUrl: note.qrCode,
+            fiscalizedAt: note.fiscalizedAt,
+          },
         })
       if (url.pathname === '/api/dashboard/credit-note')
         return jsonResponse(mockCreditNoteDetails[params.get('id')!]!)
@@ -117,15 +123,15 @@ describe('authenticated operational views', () => {
       }),
     ).toHaveAttribute('href', `/credit-notes?id=${note.zohoDocumentId}`)
     await userEvent.setup().click(within(row).getByText('FISCALIZED'))
-    expect(await screen.findByRole('link', { name: 'Credit Note Details' })).toHaveAttribute(
-      'href',
-      `/credit-notes?id=${note.zohoDocumentId}`,
-    )
-    await userEvent.setup().click(screen.getByRole('link', { name: 'Credit Note Details' }))
     expect(await screen.findByRole('region', { name: 'Document information' })).toBeInTheDocument()
+    expect(screen.getAllByText(note.receiptNumber!).length).toBeGreaterThan(0)
     expect(fetch).toHaveBeenCalledWith(
       `/api/dashboard/documents/credit-notes/${note.zohoDocumentId}`,
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
+    expect(fetch).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/dashboard\/credit-note\?/),
+      expect.anything(),
     )
   }, 15_000)
 
@@ -211,46 +217,11 @@ describe('authenticated operational views', () => {
     expect(within(pending).getByText('4')).toBeInTheDocument()
   }, 15_000)
 
-  it('opens the source invoice details from a persisted fiscalization record', async () => {
+  it('opens Zoho invoice details from a fiscalization row without calling the failing request-detail route', async () => {
     vi.stubEnv('DEV', false)
     vi.stubEnv('VITE_DATA_MODE', 'api')
     vi.stubEnv('VITE_API_BASE_URL', 'https://middleware.example.test')
     vi.stubEnv('VITE_AUTH_MODE', 'unconfigured')
-    const detail = {
-      request: {
-        ...invoice,
-        snapshot: null,
-        attempts: [],
-        evidence: {
-          cuSerialNumber: 'CU-SERIAL-42',
-          cuInvoiceNumber: 'CU-42',
-          cuReceiptNumber: 'CU-42',
-          qrVerificationUrl: invoice.qrCode,
-          fiscalizedAtLocal: '2026-11-09T13:02:00',
-          timeZone: 'Africa/Nairobi',
-          fiscalizedAtUtc: invoice.fiscalizedAt,
-          evidenceSource: {
-            cuSerialNumber: 'startup_configuration',
-            cuInvoiceNumber: 'electronic_journal',
-            cuReceiptNumber: 'close_receipt',
-            electronicJournal: 'tremol_g03',
-            qrVerificationUrl: 'close_receipt',
-            fiscalizedAt: 'electronic_journal',
-            transmissionStatus: 'successful_g03_receipt',
-          },
-        },
-        etims: null,
-        writeback: null,
-        manualReview: null,
-        timeline: [
-          {
-            event: 'request_received',
-            timestamp: invoice.createdAt,
-            status: 'persisted',
-          },
-        ],
-      },
-    }
     const fetchSpy = vi.fn(async (input: string | URL | Request) => {
       const url = new URL(String(input), 'https://dashboard.example.test')
       if (url.pathname === '/api/dashboard/documents/invoices/zoho-42')
@@ -263,10 +234,40 @@ describe('authenticated operational views', () => {
             customer_name: 'Verified Customer',
             line_items: [],
           },
-          fiscalizationRequest: null,
+          fiscalizationRequest: {
+            requestId: invoice.requestId,
+            status: invoice.fiscalizationStatus,
+            cuReceiptNumber: invoice.receiptNumber,
+            kraQrUrl: invoice.qrCode,
+            fiscalizedAt: invoice.fiscalizedAt,
+          },
         })
       if (url.pathname === '/api/dashboard/invoice' && url.searchParams.get('id') === 'request-42')
-        return jsonResponse(detail)
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 'UPSTREAM_CONTRACT_ERROR',
+              message: 'The middleware response did not match the dashboard contract.',
+              requestId: 'fixture-request-contract-mismatch',
+              validationIssues: [
+                { path: 'request.snapshot.invoiceNumber', expected: 'string', actual: 'missing' },
+                { path: 'request.snapshot.date', expected: 'string', actual: 'missing' },
+                { path: 'request.snapshot.currency', expected: 'string', actual: 'missing' },
+                { path: 'request.snapshot.subtotal', expected: 'string', actual: 'missing' },
+                { path: 'request.snapshot.taxTotal', expected: 'string', actual: 'missing' },
+                { path: 'request.snapshot.total', expected: 'string', actual: 'missing' },
+                { path: 'request.snapshot.lines', expected: 'array', actual: 'missing' },
+                {
+                  path: 'request.snapshot',
+                  expected: 'no additional properties',
+                  actual: 'object',
+                },
+                { path: 'request.manualReview', expected: 'object', actual: 'missing' },
+              ],
+            },
+          }),
+          { status: 502, headers: { 'Content-Type': 'application/json; charset=utf-8' } },
+        )
       if (url.pathname === '/api/dashboard/invoices') {
         const matches =
           !url.searchParams.has('search') || url.searchParams.get('search') === 'INV-42'
@@ -305,7 +306,7 @@ describe('authenticated operational views', () => {
     )
 
     expect(await screen.findByText('INV-42')).toBeInTheDocument()
-    expect(screen.getByText('CU-42')).toBeInTheDocument()
+    expect(screen.getAllByText('CU-42').length).toBeGreaterThan(0)
     expect(fetchSpy).toHaveBeenCalledWith(
       expect.stringMatching(/^\/api\/dashboard\/invoices\?/),
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
@@ -325,17 +326,16 @@ describe('authenticated operational views', () => {
       '/invoices?id=zoho-42',
     )
     await user.click(within(screen.getByText('INV-42').closest('tr')!).getByText('Succeeded'))
-    expect(await screen.findByRole('dialog', { name: 'INV-42' })).toBeInTheDocument()
-    expect(await screen.findByText('Document & processing')).toBeInTheDocument()
-    expect(screen.getByRole('link', { name: 'Invoice Details' })).toHaveAttribute(
-      'href',
-      '/invoices?id=zoho-42',
-    )
-    await user.click(screen.getByRole('link', { name: 'Invoice Details' }))
     expect(await screen.findByRole('region', { name: 'Document information' })).toBeInTheDocument()
+    expect(screen.getByText('Zoho document ID')).toBeInTheDocument()
+    expect(screen.getAllByText('CU-42').length).toBeGreaterThan(0)
     expect(fetchSpy).toHaveBeenCalledWith(
       '/api/dashboard/documents/invoices/zoho-42',
       expect.objectContaining({ method: 'GET', credentials: 'same-origin' }),
+    )
+    expect(fetchSpy).not.toHaveBeenCalledWith(
+      expect.stringMatching(/^\/api\/dashboard\/invoice\?/),
+      expect.anything(),
     )
 
     queryClient.clear()

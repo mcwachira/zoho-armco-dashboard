@@ -22,7 +22,7 @@ import {
 } from 'lucide-react'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { toast } from 'sonner'
-import { Link, useLocation } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import type { GlobalDateRange } from '@/types/dashboard'
 import { useAuth } from '@/lib/auth/AuthProvider'
 import { ApiError } from '@/lib/api/client'
@@ -61,6 +61,11 @@ import './api-operational-pages.css'
 type RecordKind = 'invoice' | 'credit_note'
 type SelectedRecord = { kind: RecordKind; id: string }
 const localMockApiEnabled = import.meta.env.DEV && import.meta.env.VITE_DATA_MODE === 'mock'
+
+function documentDetailRoute(kind: RecordKind, zohoDocumentId: string) {
+  const route = kind === 'invoice' ? '/invoices' : '/credit-notes'
+  return `${route}?${new URLSearchParams({ id: zohoDocumentId })}`
+}
 
 const rangeDuration: Record<GlobalDateRange, number> = {
   '24h': 24 * 60 * 60 * 1000,
@@ -777,6 +782,7 @@ function recordCsv(items: Array<DashboardInvoiceItem | DashboardCreditNoteItem>)
 
 export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
   const location = useLocation()
+  const navigate = useNavigate()
   const [kind, setKind] = useState<RecordKind>(() =>
     new URLSearchParams(location.search).get('kind') === 'credit_note' ? 'credit_note' : 'invoice',
   )
@@ -1161,10 +1167,13 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
                         <tr
                           key={row.requestId}
                           className="api-click-row"
-                          onClick={() => setSelected({ kind, id: row.requestId })}
+                          onClick={() =>
+                            navigate(documentDetailRoute(row.documentType, row.zohoDocumentId))
+                          }
                           tabIndex={0}
                           onKeyDown={(event) =>
-                            event.key === 'Enter' && setSelected({ kind, id: row.requestId })
+                            event.key === 'Enter' &&
+                            navigate(documentDetailRoute(row.documentType, row.zohoDocumentId))
                           }
                         >
                           {visibleColumns.document && (
@@ -1241,7 +1250,7 @@ export function ApiFiscalization({ range }: { range: GlobalDateRange }) {
                             </Link>
                             <button
                               className="icon-button"
-                              aria-label={`Open ${row.documentNumber ?? row.requestId}`}
+                              aria-label={`Open execution details for ${row.documentNumber ?? row.requestId}`}
                               onClick={(event) => {
                                 event.stopPropagation()
                                 setSelected({ kind, id: row.requestId })
