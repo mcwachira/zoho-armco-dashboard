@@ -11,13 +11,14 @@ import {
 } from './document-provisional'
 import { ReceiptReconciliation } from './ReceiptReconciliation'
 import { resolveReceiptReconciliation, safeVerificationUrl } from './reconciliation-contracts'
+import type { WritebackOperation } from './operation-contracts'
 
 export function DocumentStatus({
   value,
   source,
 }: {
   value: string | null | undefined
-  source: 'zoho' | 'fiscal'
+  source: 'zoho' | 'fiscal' | 'writeback'
 }) {
   // Preserve source status verbatim. No provisional status is assigned success,
   // failure or device-execution semantics; the color identifies its source.
@@ -38,6 +39,7 @@ export function RelatedInvoice({ document }: { document: ProvisionalDocument }) 
     <>
       {invoices.map((invoice, index) => {
         const id = zohoId(invoice, 'invoice')
+        const appliedAmount = 'amount' in invoice ? invoice.amount : undefined
         return (
           <div key={index}>
             {id ? (
@@ -46,6 +48,11 @@ export function RelatedInvoice({ document }: { document: ProvisionalDocument }) 
               </Link>
             ) : (
               invoice.invoice_number || '—'
+            )}
+            {appliedAmount != null && (
+              <small className="document-line-description">
+                Applied amount: {documentAmount(appliedAmount)}
+              </small>
             )}
           </div>
         )
@@ -71,7 +78,15 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-export function DocumentDetailView({ data, kind }: { data: DocumentDetail; kind: DocumentKind }) {
+export function DocumentDetailView({
+  data,
+  kind,
+  writebackOperation,
+}: {
+  data: DocumentDetail
+  kind: DocumentKind
+  writebackOperation?: WritebackOperation
+}) {
   const doc = data.document
   const fiscal = data.fiscalizationRequest
   const address = doc.billing_address
@@ -109,6 +124,14 @@ export function DocumentDetailView({ data, kind }: { data: DocumentDetail; kind:
           <Field label="Document date">{documentDate(doc.date)}</Field>
           {kind === 'invoice' && <Field label="Due date">{documentDate(doc.due_date)}</Field>}
           <Field label="Currency">{doc.currency_code}</Field>
+          {kind === 'invoice' && (
+            <>
+              <Field label="Payment terms">{doc.payment_terms_label}</Field>
+              <Field label="Payment terms (days)">
+                {doc.payment_terms == null ? null : documentAmount(doc.payment_terms)}
+              </Field>
+            </>
+          )}
           <Field label="Source discount">{doc.discount}</Field>
           <Field label="Discount type">{doc.discount_type}</Field>
           <Field label="Discount before tax">
@@ -271,10 +294,72 @@ export function DocumentDetailView({ data, kind }: { data: DocumentDetail; kind:
           <Field label={`Total${doc.currency_code ? ` (${doc.currency_code})` : ''}`}>
             {documentAmount(doc.total)}
           </Field>
-          {kind === 'invoice' && <Field label="Balance">{documentAmount(doc.balance)}</Field>}
+          <Field label={kind === 'invoice' ? 'Balance due' : 'Remaining credit balance'}>
+            {documentAmount(doc.balance)}
+          </Field>
+          {kind === 'invoice' && (
+            <>
+              <Field label="Payments received">{documentAmount(doc.payment_made)}</Field>
+              <Field label="Credits applied">{documentAmount(doc.credits_applied)}</Field>
+            </>
+          )}
         </dl>
       </section>
       <ReceiptReconciliation value={resolveReceiptReconciliation(data)} />
+      {writebackOperation && (
+        <section className="document-section" aria-label="Related writeback operation">
+          <h3>Related Zoho writeback operation</h3>
+          <p className="api-note">
+            Writeback status is independent of fiscalization status. This is the persisted operation
+            associated with the selected Zoho document.
+          </p>
+          <dl className="document-fields">
+            <Field label="Writeback status">
+              <DocumentStatus value={writebackOperation.status} source="writeback" />
+            </Field>
+            <Field label="Writeback operation ID">{writebackOperation.writebackId}</Field>
+            <Field label="Fiscalization request ID">{writebackOperation.requestId}</Field>
+            <Field label="Error category">{writebackOperation.errorCategory}</Field>
+            <Field label="Last error">{writebackOperation.errorDetails}</Field>
+            <Field label="Retry count">{writebackOperation.retryCount}</Field>
+            <Field label="Provider exchanges">{writebackOperation.providerExchangeCount}</Field>
+            <Field label="Next retry (local time)">
+              {writebackOperation.nextRetryAt
+                ? documentDate(writebackOperation.nextRetryAt, true)
+                : 'Not scheduled'}
+            </Field>
+            <Field label="Completed (local time)">
+              {writebackOperation.completedAt
+                ? documentDate(writebackOperation.completedAt, true)
+                : 'Not completed'}
+            </Field>
+            <Field label="Fields written">
+              {writebackOperation.fieldsWritten?.length
+                ? writebackOperation.fieldsWritten.join(', ')
+                : null}
+            </Field>
+            <Field label="Fields remaining">
+              {writebackOperation.fieldsRemaining?.length
+                ? writebackOperation.fieldsRemaining.join(', ')
+                : null}
+            </Field>
+            <Field label="Manual intervention required">
+              {writebackOperation.manualInterventionRequired == null
+                ? null
+                : writebackOperation.manualInterventionRequired
+                  ? 'Yes'
+                  : 'No'}
+            </Field>
+            {writebackOperation.metrics && (
+              <Field label="Writeback metrics">
+                <pre className="document-evidence">
+                  {JSON.stringify(writebackOperation.metrics, null, 2)}
+                </pre>
+              </Field>
+            )}
+          </dl>
+        </section>
+      )}
       <section className="document-section" aria-label="Fiscalization summary">
         <h3>Fiscalization summary</h3>
         {fiscal === null ? (

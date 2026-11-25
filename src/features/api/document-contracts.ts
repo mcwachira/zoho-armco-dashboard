@@ -48,8 +48,11 @@ export function documentListPath(kind: DocumentKind, params: DocumentQuery = {})
 }
 
 export function documentDetailPath(kind: DocumentKind, id: string) {
-  if (!id.trim()) throw new Error('A Zoho document ID is required.')
-  return `/api/dashboard/documents/${kind === 'invoice' ? 'invoice' : 'credit-note'}?${new URLSearchParams({ id: id.trim() })}`
+  const documentId = id.trim()
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(documentId))
+    throw new Error('A valid Zoho document ID is required.')
+  const collection = kind === 'invoice' ? 'invoices' : 'credit-notes'
+  return `/api/dashboard/documents/${collection}/${encodeURIComponent(documentId)}`
 }
 
 /** A reliable count cannot be derived from any individual live register page. */

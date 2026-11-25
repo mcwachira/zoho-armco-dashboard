@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link, useLocation, useSearchParams } from 'react-router-dom'
 import {
   AlertCircle,
   ArrowLeft,
@@ -28,6 +28,7 @@ import {
   type ProvisionalFiscalization,
 } from './document-provisional'
 import { DocumentDetailView, DocumentStatus, RelatedInvoice } from './DocumentDetailView'
+import { writebackOperationSchema } from './operation-contracts'
 import { ReceiptReconciliation, ReconciliationBadge } from './ReceiptReconciliation'
 import {
   receiptReconciliationStatuses,
@@ -56,6 +57,7 @@ export function ApiDocuments({
   reconciliation?: boolean
 }) {
   const [search, setSearch] = useSearchParams()
+  const location = useLocation()
   const title = kind === 'invoice' ? 'Invoice' : 'Credit-note'
   const pluralPath = reconciliation
     ? '/reconciliation'
@@ -92,6 +94,19 @@ export function ApiDocuments({
   }
   const validation = documentQuerySchema.safeParse(params)
   const validId = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(id)
+  const writebackCandidate =
+    location.state && typeof location.state === 'object'
+      ? writebackOperationSchema.safeParse(
+          (location.state as { writebackOperation?: unknown }).writebackOperation,
+        )
+      : null
+  const expectedWritebackType = kind === 'credit_note' ? 'CREDIT_NOTE' : 'INVOICE'
+  const relatedWriteback =
+    writebackCandidate?.success &&
+    writebackCandidate.data.documentId === id &&
+    writebackCandidate.data.documentType.toUpperCase() === expectedWritebackType
+      ? writebackCandidate.data
+      : undefined
   const path = validation.success ? documentListPath(kind, validation.data) : null
   const list = useQuery({
     queryKey: ['dashboard-documents', kind, path],
@@ -333,7 +348,11 @@ export function ApiDocuments({
             )}
           </div>
         ) : id && detail.data ? (
-          <DocumentDetailView data={detail.data} kind={kind} />
+          <DocumentDetailView
+            data={detail.data}
+            kind={kind}
+            writebackOperation={relatedWriteback}
+          />
         ) : !id && list.data ? (
           <>
             <div className="document-register-toolbar">

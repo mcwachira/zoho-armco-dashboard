@@ -129,6 +129,11 @@
   background: #272139;
   border: 1px solid #483a61;
 }
+.document-status-writeback {
+  color: #9bd9c3;
+  background: #17332b;
+  border: 1px solid #2b594a;
+}
 .document-unavailable {
   color: var(--muted);
   font-size: 12px;
