@@ -11,6 +11,7 @@ import {
   mockInvoiceDetails,
   mockCreditNoteDetails,
 } from './mock-api-fixtures'
+import { invoiceDocumentFixture } from './__fixtures__/document-fixtures'
 
 vi.mock('@/lib/auth/AuthProvider', () => ({ useAuth: () => ({ user: { role: 'admin' } }) }))
 
@@ -45,6 +46,19 @@ async function mount(fetch: ReturnType<typeof vi.fn>, route = '/requests') {
 }
 function requestFetch(total = 1) {
   return vi.fn(async (path: string) => {
+    const sourceInvoiceId = path.match(/\/api\/dashboard\/documents\/invoices\/([^?]+)/)?.[1]
+    if (sourceInvoiceId) {
+      const zohoDocumentId = decodeURIComponent(sourceInvoiceId)
+      const source = mockInvoices.find((item) => item.zohoDocumentId === zohoDocumentId)
+      return json({
+        documentType: 'invoice',
+        zohoDocumentId,
+        document: { ...invoiceDocumentFixture, invoice_id: zohoDocumentId },
+        fiscalizationRequest: source
+          ? { requestId: source.requestId, status: source.fiscalizationStatus }
+          : null,
+      })
+    }
     const writebackRequestId = path.match(/\/writebacks\/(?:invoices|credit-notes)\/([^?]+)/)?.[1]
     if (writebackRequestId)
       return json({ status: 'failed', requestId: decodeURIComponent(writebackRequestId) })
@@ -214,15 +228,21 @@ describe('documented fiscalization request history', () => {
     await mount(fetch, `/requests?status=Succeeded&id=${mockInvoices[0].requestId}`)
     const dialog = await screen.findByRole('dialog')
     await within(dialog).findByText('Confirmed receipt evidence')
+    expect(await within(dialog).findByText('UI fixture description')).toBeInTheDocument()
     expect(within(dialog).getByRole('link', { name: /Open persisted QR/ })).toHaveAttribute(
       'href',
       mockInvoices[0].qrCode,
     )
-    expect(within(dialog).getByText('Attempt history')).toBeInTheDocument()
+    expect(within(dialog).getAllByText('Attempt history').length).toBeGreaterThan(0)
     expect(within(dialog).getByText('Request timeline')).toBeInTheDocument()
     expect(
       fetch.mock.calls.some(
         ([path]) => path === `/api/dashboard/invoice?id=${mockInvoices[0].requestId}`,
+      ),
+    ).toBe(true)
+    expect(
+      fetch.mock.calls.some(
+        ([path]) => path === `/api/dashboard/documents/invoices/${mockInvoices[0].zohoDocumentId}`,
       ),
     ).toBe(true)
     await userEvent.click(within(dialog).getByRole('button', { name: 'Close details' }))

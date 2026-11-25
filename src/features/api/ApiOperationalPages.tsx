@@ -31,6 +31,7 @@ import {
   useDashboardCapabilitiesQuery,
   useDashboardCreditNoteDetailQuery,
   useDashboardCreditNoteListQuery,
+  useDashboardDocumentDetailQuery,
   useDashboardDeviceDiagnosticsQuery,
   useDashboardInvoiceDetailQuery,
   useDashboardInvoiceListQuery,
@@ -54,6 +55,7 @@ import type {
 } from './schemas'
 import { invoiceFiscalizationStatusSchema, creditNoteFiscalizationStateSchema } from './schemas'
 import { ApiOperationsHome, ApiWritebackOperations } from './ApiOperations'
+import { DocumentDetailView } from './DocumentDetailView'
 import { WritebackRecovery } from './WritebackRecovery'
 import { OverviewDateFilters, useOverviewDateRange } from './OverviewDateFilters'
 import './api-operational-pages.css'
@@ -1401,6 +1403,11 @@ export function RecordDrawer({
   )
   const query = selected.kind === 'invoice' ? invoice : credit
   const request = query.data?.request
+  const sourceDocument = useDashboardDocumentDetailQuery(
+    selected.kind,
+    request?.zohoDocumentId ?? '',
+    selected.kind === 'invoice' && Boolean(request),
+  )
   const dialogRef = useRef<HTMLElement>(null)
   useEffect(() => {
     const dialog = dialogRef.current
@@ -1533,6 +1540,24 @@ export function RecordDrawer({
                   value={request.transmissionStatus ?? 'Unavailable'}
                 />
               </DetailSection>
+              {selected.kind === 'invoice' && (
+                <DetailSection title="Zoho Books source invoice">
+                  {sourceDocument.isLoading ? (
+                    <p role="status">Loading source invoice details from Zoho Books…</p>
+                  ) : sourceDocument.isError ? (
+                    <p role="alert">
+                      Source invoice details unavailable:{' '}
+                      {sourceDocument.error instanceof Error
+                        ? sourceDocument.error.message
+                        : 'The source document could not be retrieved.'}
+                    </p>
+                  ) : sourceDocument.data ? (
+                    <DocumentDetailView data={sourceDocument.data} kind="invoice" />
+                  ) : (
+                    <p role="status">Source invoice details are not available.</p>
+                  )}
+                </DetailSection>
+              )}
               <ProcessingDiagnostics request={request} />
               {selected.kind === 'invoice' ? (
                 <InvoiceDetail request={request as NonNullable<typeof invoice.data>['request']} />
@@ -1706,30 +1731,16 @@ function InvoiceDetail({
 }) {
   return (
     <>
-      <DetailSection title="Original invoice snapshot">
-        {request.snapshot ? (
-          <>
-            <DetailLine
-              label="Invoice number"
-              value={request.snapshot.invoiceNumber ?? 'Unavailable'}
-            />
-            <DetailLine label="Invoice date" value={request.snapshot.date ?? 'Unavailable'} />
-            <DetailLine label="Currency" value={request.snapshot.currency} />
-            <DetailLine label="Subtotal" value={request.snapshot.subtotal} />
-            <DetailLine label="Tax total" value={request.snapshot.taxTotal} />
-            <DetailLine label="Total" value={request.snapshot.total} />
-            <SnapshotLines
-              lines={request.snapshot.lines.map((line) => ({
-                name: line.description ?? line.itemName ?? 'Unnamed line',
-                quantity: line.quantity,
-                rate: line.unitPrice,
-                total: line.lineTotal,
-              }))}
-            />
-          </>
-        ) : (
-          <span className="api-muted">No invoice snapshot was persisted.</span>
-        )}
+      <DetailSection title="Persisted fiscalization snapshot metadata">
+        <DetailLine label="Snapshot present" value={request.snapshot.present ? 'Yes' : 'No'} />
+        <DetailLine label="Snapshot valid" value={request.snapshot.valid ? 'Yes' : 'No'} />
+        <DetailLine
+          label="Snapshot version"
+          value={
+            request.snapshot.version === null ? 'Unavailable' : String(request.snapshot.version)
+          }
+        />
+        <DetailLine label="Snapshot ID" value={request.snapshot.snapshotId ?? 'Unavailable'} />
       </DetailSection>
       <DetailSection title="Confirmed receipt evidence">
         {request.evidence ? (
@@ -1831,22 +1842,10 @@ function InvoiceDetail({
         ))}
       </DetailSection>
       <DetailSection title="Manual review">
-        {request.manualReview ? (
-          <>
-            <DetailLine label="Case" value={request.manualReview.caseId} />
-            <DetailLine label="State" value={request.manualReview.status} />
-            <DetailLine label="Reason" value={request.manualReview.reason} />
-            {request.manualReview.decisions.map((decision) => (
-              <div className="api-timeline-item" key={decision.sequence}>
-                <time>{new Date(decision.recordedAt).toLocaleString()}</time>
-                <strong>{decision.resolution}</strong>
-                <span>{decision.reason}</span>
-              </div>
-            ))}
-          </>
-        ) : (
-          <span className="api-muted">No manual-review case recorded.</span>
-        )}
+        <span className="api-muted">
+          Manual-review cases are reported separately from this request detail.{' '}
+          <Link to="/manual-review">Open manual-review operations</Link>.
+        </span>
       </DetailSection>
       <DetailSection title="Request timeline">
         <Timeline

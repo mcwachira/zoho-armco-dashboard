@@ -122,9 +122,9 @@ describe('Vercel dashboard filesystem routes', () => {
     {
       source: '/api/dashboard/documents/invoices/:invoiceId',
       destination: '/api/dashboard?dashboardResource=documents%2Finvoice&id=:invoiceId',
-      id: 'zoho-invoice-42',
+      id: '1462401000021901100',
       kind: 'invoice',
-      upstreamPath: '/api/dashboard/documents/invoices/zoho-invoice-42',
+      upstreamPath: '/api/dashboard/documents/invoices/1462401000021901100',
     },
     {
       source: '/api/dashboard/documents/credit-notes/:creditNoteId',
@@ -166,9 +166,114 @@ describe('Vercel dashboard filesystem routes', () => {
         response.res,
       )
       expect(response.status()).toBe(200)
-      expect(new URL(String(upstream.mock.calls[0]![0])).pathname).toBe(upstreamPath)
+      const [forwardedUrl, forwardedOptions] = upstream.mock.calls[0]!
+      const forwarded = new URL(String(forwardedUrl))
+      expect(forwarded.pathname).toBe(upstreamPath)
+      expect(forwarded.search).toBe('')
+      expect(forwardedOptions.method).toBe('GET')
+      expect(forwardedOptions.headers).toMatchObject({
+        Accept: 'application/json',
+        Authorization: `Bearer ${serviceCredential}`,
+      })
+      expect(forwardedOptions.headers['X-Request-ID']).toMatch(/^[0-9a-f-]{36}$/i)
     },
   )
+
+  it('returns the query-validation 400 locally when a document rewrite omits its ID', async () => {
+    const upstream = vi.fn()
+    vi.stubGlobal('fetch', upstream)
+    const { default: handler } = await import('../dashboard')
+    const response = responseMock()
+    await handler(
+      {
+        method: 'GET',
+        url: '/api/dashboard?dashboardResource=documents%2Finvoice',
+        headers: { cookie: sessionCookie() },
+      },
+      response.res,
+    )
+    expect(response.status()).toBe(400)
+    expect(response.body()).toMatchObject({
+      error: { code: 'INVALID_QUERY', message: 'Query parameters are invalid.' },
+    })
+    expect(upstream).not.toHaveBeenCalled()
+  })
+
+  it('recovers a document ID exposed as a Vercel rewrite parameter', async () => {
+    const upstream = vi.fn().mockResolvedValue(
+      Response.json({
+        documentType: 'invoice',
+        zohoDocumentId: '1462401000021901100',
+        document: { invoice_id: '1462401000021901100' },
+        fiscalizationRequest: null,
+      }),
+    )
+    vi.stubGlobal('fetch', upstream)
+    const { default: handler } = await import('../dashboard')
+    const response = responseMock()
+    await handler(
+      {
+        method: 'GET',
+        url: '/api/dashboard?dashboardResource=documents%2Finvoice',
+        query: {
+          dashboardResource: 'documents/invoice',
+          invoiceId: '1462401000021901100',
+        },
+        headers: { cookie: sessionCookie() },
+      },
+      response.res,
+    )
+    expect(response.status()).toBe(200)
+    const [forwardedUrl, forwardedOptions] = upstream.mock.calls[0]!
+    const forwarded = new URL(String(forwardedUrl))
+    expect(forwarded.pathname).toBe('/api/dashboard/documents/invoices/1462401000021901100')
+    expect(forwarded.search).toBe('')
+    expect(forwardedOptions.method).toBe('GET')
+  })
+
+  it('normalizes a matching captured rewrite alias without accepting conflicting IDs', async () => {
+    const upstream = vi.fn().mockResolvedValue(
+      Response.json({
+        documentType: 'invoice',
+        zohoDocumentId: '1462401000021901100',
+        document: { invoice_id: '1462401000021901100' },
+        fiscalizationRequest: null,
+      }),
+    )
+    vi.stubGlobal('fetch', upstream)
+    const { default: handler } = await import('../dashboard')
+    const response = responseMock()
+    await handler(
+      {
+        method: 'GET',
+        url: '/api/dashboard?dashboardResource=documents%2Finvoice&id=1462401000021901100&invoiceId=1462401000021901100',
+        headers: { cookie: sessionCookie() },
+      },
+      response.res,
+    )
+    expect(response.status()).toBe(200)
+    expect(new URL(String(upstream.mock.calls[0]![0])).search).toBe('')
+  })
+
+  it('rejects a conflicting document rewrite alias before forwarding', async () => {
+    const upstream = vi.fn()
+    vi.stubGlobal('fetch', upstream)
+    const { default: handler } = await import('../dashboard')
+    const response = responseMock()
+    await handler(
+      {
+        method: 'GET',
+        url: '/api/dashboard?dashboardResource=documents%2Finvoice&id=1462401000021901100&invoiceId=other-id',
+        headers: { cookie: sessionCookie() },
+      },
+      response.res,
+    )
+    expect(response.status()).toBe(400)
+    expect(response.body()).toMatchObject({
+      error: { code: 'INVALID_QUERY', message: 'Query parameters are invalid.' },
+    })
+    expect(upstream).not.toHaveBeenCalled()
+  })
 
   it('preserves prototype-backed Node request headers through consolidation', async () => {
     const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify(mockServiceHealth)))

@@ -3,6 +3,7 @@ import { apiMode, getJson } from '@/lib/api/client'
 import { apiQueryKeys } from './queryKeys'
 import { serializeOverviewRange } from './overview-dates'
 import { refreshIntervalMs } from '@/lib/config'
+import { documentDetailPath, documentDetailSchema, type DocumentKind } from './document-contracts'
 import {
   dashboardCapabilitiesSchema,
   dashboardCreditNoteQueryParamsSchema,
@@ -191,6 +192,35 @@ export function useDashboardInvoiceDetailQuery(requestId: string) {
     `/api/dashboard/invoice${toQueryString({ id: requestId })}`,
     dashboardInvoiceDetailSchema,
     Boolean(requestId),
+  )
+}
+
+/** Read the original Zoho document using its Zoho ID, separately from request history. */
+export function useDashboardDocumentDetailQuery(
+  kind: DocumentKind,
+  zohoDocumentId: string,
+  enabled = true,
+) {
+  return withFreshness(
+    useQuery({
+      queryKey: apiQueryKeys.dashboardDocumentDetail(kind, zohoDocumentId),
+      queryFn: async ({ signal }) => {
+        const data = await getDashboardJson(
+          documentDetailPath(kind, zohoDocumentId),
+          documentDetailSchema,
+          signal,
+        )
+        const sourceId = kind === 'invoice' ? data.document.invoice_id : data.document.creditnote_id
+        if (
+          data.documentType !== kind ||
+          data.zohoDocumentId !== zohoDocumentId ||
+          (sourceId != null && sourceId !== zohoDocumentId)
+        )
+          throw new Error('The returned document identity does not match the selected request.')
+        return data
+      },
+      ...queryOptions(enabled && Boolean(zohoDocumentId), true),
+    }),
   )
 }
 

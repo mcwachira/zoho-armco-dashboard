@@ -18,6 +18,8 @@ export const apiQueryKeys = {
     [...apiQueryKeys.dashboard(), 'credit-notes', params] as const,
   dashboardCreditNote: (requestId: string) =>
     [...apiQueryKeys.dashboard(), 'credit-note', requestId] as const,
+  dashboardDocumentDetail: (kind: 'invoice' | 'credit_note', documentId: string) =>
+    [...apiQueryKeys.dashboard(), 'document-detail', kind, documentId] as const,
   dashboardWritebacks: (params: object) =>
     [...apiQueryKeys.dashboard(), 'writebacks', params] as const,
   dashboardManualReview: (params: object) =>

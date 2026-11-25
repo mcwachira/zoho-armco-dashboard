@@ -384,12 +384,11 @@ describe('verified transaction detail contracts', () => {
           attemptCount: 0,
           lastError: null,
           correlationId: null,
-          snapshot: null,
+          snapshot: { present: false, valid: false, version: null, snapshotId: null },
           attempts: [],
           evidence: null,
           etims: null,
           writeback: null,
-          manualReview: null,
           timeline: [
             {
               event: 'request_received',
@@ -414,18 +413,58 @@ describe('verified transaction detail contracts', () => {
     ).toBe(false)
   })
 
-  it('accepts populated invoice snapshot, attempts, receipt evidence, eTIMS and writeback', () => {
+  it('accepts the middleware snapshot metadata and persisted invoice execution details', () => {
     const populated = mockInvoiceDetails[mockInvoices[0]!.requestId]!
     expect(dashboardInvoiceDetailSchema.safeParse(populated).success).toBe(true)
-    expect(populated.request.snapshot).toMatchObject({
-      invoiceNumber: expect.any(String),
-      lines: [expect.objectContaining({ description: expect.any(String) })],
+    expect(populated.request.snapshot).toEqual({
+      present: true,
+      valid: true,
+      version: 1,
+      snapshotId: 'demo-snapshot-1001',
     })
     expect(populated.request.attempts).not.toHaveLength(0)
     expect(populated.request.evidence).not.toBeNull()
     expect(populated.request.etims).not.toBeNull()
     expect(populated.request.writeback).not.toBeNull()
     expect(populated.request.timeline.length).toBeGreaterThan(0)
+  })
+
+  it('rejects the stale invoice-data snapshot projection and unreturned manual-review field', () => {
+    const actual = mockInvoiceDetails[mockInvoices[0]!.requestId]!
+    expect(
+      dashboardInvoiceDetailSchema.safeParse({
+        request: {
+          ...actual.request,
+          snapshot: {
+            present: true,
+            valid: true,
+            version: 1,
+            snapshotId: 'persisted-snapshot-id',
+          },
+        },
+      }).success,
+    ).toBe(true)
+    expect(
+      dashboardInvoiceDetailSchema.safeParse({
+        request: {
+          ...actual.request,
+          snapshot: {
+            invoiceNumber: 'INV-001',
+            date: '2026-11-24',
+            currency: 'KES',
+            subtotal: '100.00',
+            taxTotal: '16.00',
+            total: '116.00',
+            lines: [],
+          },
+        },
+      }).success,
+    ).toBe(false)
+    expect(
+      dashboardInvoiceDetailSchema.safeParse({
+        request: { ...actual.request, manualReview: null },
+      }).success,
+    ).toBe(false)
   })
 
   it('validates manual-review summary rows separately from direct case-detail DTOs', () => {

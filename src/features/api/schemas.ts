@@ -327,26 +327,12 @@ const nullableText = z.string().nullable()
 
 const invoiceSnapshotSchema = z
   .object({
-    invoiceNumber: nullableText,
-    date: nullableText,
-    currency: z.string(),
-    subtotal: z.string(),
-    taxTotal: z.string(),
-    total: z.string(),
-    lines: z.array(
-      z
-        .object({
-          description: nullableText,
-          itemName: nullableText,
-          quantity: z.string(),
-          unitPrice: z.string(),
-          lineTotal: z.string(),
-        })
-        .strict(),
-    ),
+    present: z.boolean(),
+    valid: z.boolean(),
+    version: z.number().int().nullable(),
+    snapshotId: nullableText,
   })
   .strict()
-  .nullable()
 
 const invoiceDetailWritebackStatusSchema = z.enum([
   'not_attempted',
@@ -411,29 +397,6 @@ const invoiceWritebackDetailSchema = z
   .strict()
   .nullable()
 
-const invoiceManualReviewDetailSchema = z
-  .object({
-    caseId: z.string(),
-    status: z.string(),
-    reason: z.string(),
-    observedState: z.string(),
-    createdAt: dashboardTimestampSchema,
-    updatedAt: dashboardTimestampSchema,
-    decisions: z.array(
-      z
-        .object({
-          sequence: z.number().int(),
-          requestedOutcome: z.string(),
-          resolution: z.string(),
-          reason: z.string(),
-          recordedAt: dashboardTimestampSchema,
-        })
-        .strict(),
-    ),
-  })
-  .strict()
-  .nullable()
-
 const invoiceEtimsDetailSchema = z
   .object({
     status: invoiceReconciliationStatusSchema,
@@ -474,7 +437,6 @@ export const dashboardInvoiceDetailSchema = z
         evidence: invoiceEvidenceSchema.nullable(),
         etims: invoiceEtimsDetailSchema,
         writeback: invoiceWritebackDetailSchema,
-        manualReview: invoiceManualReviewDetailSchema,
         timeline: z.array(invoiceTimelineEventSchema).min(1),
       })
       .strict(),

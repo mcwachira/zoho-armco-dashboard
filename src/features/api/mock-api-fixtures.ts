@@ -147,21 +147,10 @@ const succeededInvoiceDetail: DashboardInvoiceDetail = {
     ...mockInvoices[0]!,
     writebackStatus: 'succeeded',
     snapshot: {
-      invoiceNumber: 'DEMO-INV-1001',
-      date: today(),
-      currency: 'KES',
-      subtotal: '159051.72',
-      taxTotal: '25448.28',
-      total: '184500.00',
-      lines: [
-        {
-          description: 'Sample office equipment',
-          itemName: 'Sample office equipment',
-          quantity: '1',
-          unitPrice: '159051.72',
-          lineTotal: '159051.72',
-        },
-      ],
+      present: true,
+      valid: true,
+      version: 1,
+      snapshotId: 'demo-snapshot-1001',
     },
     attempts: [
       {
@@ -218,7 +207,6 @@ const succeededInvoiceDetail: DashboardInvoiceDetail = {
       completedAt: ago(27),
       retryCount: 0,
     },
-    manualReview: null,
     timeline: [
       { event: 'demo_request_received', timestamp: mockInvoices[0]!.createdAt, status: 'sample' },
       { event: 'demo_receipt_confirmed', timestamp: ago(28), status: 'sample' },
@@ -281,12 +269,11 @@ export const mockInvoiceDetails: Record<string, DashboardInvoiceDetail> = {
     request: {
       ...mockInvoices[1]!,
       writebackStatus: 'not_attempted',
-      snapshot: null,
+      snapshot: { present: false, valid: false, version: null, snapshotId: null },
       attempts: [],
       evidence: null,
       etims: null,
       writeback: null,
-      manualReview: null,
       timeline: [
         { event: 'demo_request_received', timestamp: mockInvoices[1]!.createdAt, status: 'sample' },
       ],
@@ -296,12 +283,11 @@ export const mockInvoiceDetails: Record<string, DashboardInvoiceDetail> = {
     request: {
       ...mockInvoices[2]!,
       writebackStatus: 'in_progress',
-      snapshot: null,
+      snapshot: { present: false, valid: false, version: null, snapshotId: null },
       attempts: [],
       evidence: null,
       etims: null,
       writeback: null,
-      manualReview: null,
       timeline: [
         { event: 'demo_request_received', timestamp: mockInvoices[2]!.createdAt, status: 'sample' },
       ],
