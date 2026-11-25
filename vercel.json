@@ -96,6 +96,14 @@
       "destination": "/api/dashboard?dashboardResource=writebacks"
     },
     {
+      "source": "/api/dashboard/documents/invoices/:invoiceId",
+      "destination": "/api/dashboard?dashboardResource=documents%2Finvoice&id=:invoiceId"
+    },
+    {
+      "source": "/api/dashboard/documents/credit-notes/:creditNoteId",
+      "destination": "/api/dashboard?dashboardResource=documents%2Fcredit-note&id=:creditNoteId"
+    },
+    {
       "source": "/api/dashboard/documents/credit-note",
       "destination": "/api/dashboard?dashboardResource=documents%2Fcredit-note"
     },

@@ -17,7 +17,10 @@ import {
   dashboardServiceHealthSchema,
   manualReviewCaseResponseSchema,
 } from '../../src/features/api/schemas.js'
-import { writebackOperationsPageSchema } from '../../src/features/api/operation-contracts.js'
+import {
+  dashboardEventsPageSchema,
+  writebackOperationsPageSchema,
+} from '../../src/features/api/operation-contracts.js'
 
 // Canonical resource names supplied by the user. Preserve the existing gateway
 // namespace until the transferred route matrix resolves full external URLs.
@@ -126,7 +129,6 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     query: dashboardIdQuery,
     response: dashboardCreditNoteDetailSchema,
     requestDetail: 'credit_note',
-    ...detailContractPending,
   },
   requests: {
     // Existing UI alias; this adds no upstream route.
@@ -201,6 +203,7 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
       .object({ ...page, ...documentType, ...dates })
       .strict()
       .superRefine(orderedDates),
+    response: dashboardEventsPageSchema,
   },
   operations: {
     path: '/operations',
@@ -216,7 +219,6 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     query: dashboardIdQuery,
     documentDetail: true,
     response: documentDetailSchema,
-    ...detailContractPending,
   },
   'documents/credit-notes': {
     path: '/documents/credit-notes',
@@ -228,7 +230,6 @@ export const dashboardReadRoutes: Record<string, DashboardReadRoute> = {
     query: dashboardIdQuery,
     documentDetail: true,
     response: documentDetailSchema,
-    ...detailContractPending,
   },
   health: {
     query: z.object({ check: z.enum(['live', 'ready']) }).strict(),

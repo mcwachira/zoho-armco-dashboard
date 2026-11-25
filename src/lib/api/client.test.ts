@@ -254,7 +254,8 @@ describe('same-origin dashboard API client safety boundary', () => {
     'actions/fiscalize',
     '../auth/session',
     'services/../actions/fiscalize',
-    'documents/invoices/123',
+    'documents/invoices/../invoice',
+    'documents/credit-notes/a?b',
     'events#fragment',
   ])('never fetches unsupported resource %s', async (resource) => {
     vi.stubEnv('VITE_DATA_MODE', 'api')
@@ -286,6 +287,8 @@ it.each([
   'documents/credit-notes?page=2',
   'documents/invoice?id=123',
   'documents/credit-note?id=123',
+  'documents/invoices/123',
+  'documents/credit-notes/credit-note-123',
 ])('allows contracted same-origin operational GET %s', async (resource) => {
   vi.resetModules()
   vi.stubEnv('DEV', false)

@@ -82,31 +82,19 @@ async function invoke(
   options: {
     method?: string
     headers?: ApiRequest['headers']
-    testPreparedDetailMapping?: boolean
   } = {},
 ) {
   const module = await entryPoints[resource]!()
   const handler = module.default as (req: ApiRequest, res: ApiResponse) => Promise<unknown>
   const response = responseMock()
-  const { dashboardReadRoutes } = await import('./dashboard-contracts')
-  const route = dashboardReadRoutes[resource]!
-  const unavailable = route.unavailable
-  // Existing synthetic detail-parser/security coverage exercises a prepared
-  // mapping only. The separate default-gate regression below verifies that
-  // production cannot forward it before exact route confirmation arrives.
-  if (route.documentDetail && options.testPreparedDetailMapping !== false) delete route.unavailable
-  try {
-    await handler(
-      {
-        method: options.method ?? 'GET',
-        url: `/api/dashboard/${resource}${query ? `?${query}` : ''}`,
-        headers: options.headers ?? { cookie: cookie() },
-      },
-      response.res,
-    )
-  } finally {
-    route.unavailable = unavailable
-  }
+  await handler(
+    {
+      method: options.method ?? 'GET',
+      url: `/api/dashboard/${resource}${query ? `?${query}` : ''}`,
+      headers: options.headers ?? { cookie: cookie() },
+    },
+    response.res,
+  )
   return response
 }
 
@@ -131,18 +119,31 @@ afterEach(() => {
   vi.resetModules()
 })
 
-describe('confirmed document BFF transport with pending response DTOs', () => {
+describe('document BFF transport', () => {
   it.each(['documents/invoice', 'documents/credit-note'])(
-    'does not activate the unconfirmed exact detail template for %s',
+    'forwards the confirmed request-scoped detail route for %s',
     async (resource) => {
-      const upstream = vi.fn()
+      const creditNote = resource === 'documents/credit-note'
+      const id = creditNote ? 'fixture-credit-note-42' : 'fixture-invoice-42'
+      const payload = {
+        documentType: creditNote ? 'credit_note' : 'invoice',
+        zohoDocumentId: id,
+        document: creditNote ? { creditnote_id: id } : { invoice_id: id },
+        fiscalizationRequest: null,
+      }
+      const upstream = vi.fn().mockResolvedValue(Response.json(payload))
       vi.stubGlobal('fetch', upstream)
-      const response = await invoke(resource, 'id=fixture-document', {
-        testPreparedDetailMapping: false,
+      const response = await invoke(resource, `id=${id}`)
+      expect(response.status()).toBe(200)
+      expect(upstream).toHaveBeenCalledOnce()
+      const [target] = upstream.mock.calls[0]!
+      expect(new URL(String(target)).pathname).toBe(
+        `/api/dashboard/documents/${creditNote ? 'credit-notes' : 'invoices'}/${id}`,
+      )
+      expect(response.body()).toMatchObject({
+        documentType: payload.documentType,
+        zohoDocumentId: id,
       })
-      expect(response.status()).toBe(503)
-      expect(response.body()).toMatchObject({ error: { code: 'CONTRACT_ROUTE_UNAVAILABLE' } })
-      expect(upstream).not.toHaveBeenCalled()
     },
   )
 

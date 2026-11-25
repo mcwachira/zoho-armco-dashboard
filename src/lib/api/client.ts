@@ -120,12 +120,16 @@ async function dashboardJson<T>(
     writebackPath && (request?.method === 'GET' || request?.method === 'POST')
       ? request.method
       : undefined
+  const documentDetailPath =
+    /^\/api\/dashboard\/documents\/invoices\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(path) ||
+    /^\/api\/dashboard\/documents\/credit-notes\/[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(path)
   if (!path.startsWith('/api/dashboard/') && !deviceRead && !deviceCancel)
     throw new ApiError('Only dashboard read routes are available.', undefined, 'configuration')
   if (
     !deviceRead &&
     !deviceCancel &&
     !writebackRequest &&
+    !documentDetailPath &&
     !/^\/api\/dashboard\/(overview|invoices|invoice|credit-notes|credit-note|services|device|capabilities|writebacks|manual-review|manual-review-case|reconciliation|events|operations|documents\/(?:invoices|invoice|credit-notes|credit-note)|requests|request|writeback|health|telemetry)(\?|$)/.test(
       path,
     )

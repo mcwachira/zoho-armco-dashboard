@@ -118,6 +118,58 @@ afterEach(() => {
 })
 
 describe('Vercel dashboard filesystem routes', () => {
+  it.each([
+    {
+      source: '/api/dashboard/documents/invoices/:invoiceId',
+      destination: '/api/dashboard?dashboardResource=documents%2Finvoice&id=:invoiceId',
+      id: 'zoho-invoice-42',
+      kind: 'invoice',
+      upstreamPath: '/api/dashboard/documents/invoices/zoho-invoice-42',
+    },
+    {
+      source: '/api/dashboard/documents/credit-notes/:creditNoteId',
+      destination: '/api/dashboard?dashboardResource=documents%2Fcredit-note&id=:creditNoteId',
+      id: 'zoho-credit-note-42',
+      kind: 'credit_note',
+      upstreamPath: '/api/dashboard/documents/credit-notes/zoho-credit-note-42',
+    },
+  ])(
+    'forwards the $kind document-detail path ID through the authenticated BFF',
+    async ({ source, destination, id, kind, upstreamPath }) => {
+      const configuration = JSON.parse(
+        readFileSync(new URL('../../vercel.json', import.meta.url), 'utf8'),
+      )
+      const rewrite = configuration.rewrites.find(
+        (rule: { source: string }) => rule.source === source,
+      )
+      expect(rewrite?.destination).toBe(destination)
+      const parameter = kind === 'invoice' ? ':invoiceId' : ':creditNoteId'
+      const rewritten = destination.replace(parameter, id)
+      const upstream = vi.fn().mockResolvedValue(
+        Response.json({
+          documentType: kind,
+          zohoDocumentId: id,
+          document: kind === 'invoice' ? { invoice_id: id } : { creditnote_id: id },
+          fiscalizationRequest: null,
+        }),
+      )
+      vi.stubGlobal('fetch', upstream)
+      const { default: handler } = await import('../dashboard')
+      const destinationUrl = new URL(rewritten, 'https://dashboard.invalid')
+      const response = responseMock()
+      await handler(
+        {
+          method: 'GET',
+          url: destinationUrl.pathname + destinationUrl.search,
+          headers: { cookie: sessionCookie() },
+        },
+        response.res,
+      )
+      expect(response.status()).toBe(200)
+      expect(new URL(String(upstream.mock.calls[0]![0])).pathname).toBe(upstreamPath)
+    },
+  )
+
   it('preserves prototype-backed Node request headers through consolidation', async () => {
     const upstream = vi.fn().mockResolvedValue(new Response(JSON.stringify(mockServiceHealth)))
     vi.stubGlobal('fetch', upstream)
