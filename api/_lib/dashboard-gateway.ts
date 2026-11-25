@@ -30,10 +30,52 @@ function send(
   message: string,
   requestId: string,
   upstreamStatus?: number,
+  validationIssues?: Array<{ path: string; expected: string; actual: string }>,
 ) {
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Request-ID', requestId)
-  return res.status(status).json({ error: { code, message, requestId, upstreamStatus } })
+  return res.status(status).json({
+    error: { code, message, requestId, upstreamStatus, validationIssues },
+  })
+}
+
+function validationDiagnostics(payload: unknown, issues: z.ZodIssue[]) {
+  const describeType = (value: unknown) =>
+    value === undefined
+      ? 'missing'
+      : value === null
+        ? 'null'
+        : Array.isArray(value)
+          ? 'array'
+          : typeof value
+  return issues.slice(0, 12).map((issue) => {
+    let actual: unknown = payload
+    for (const segment of issue.path) {
+      if (
+        actual === null ||
+        (typeof actual !== 'object' && typeof actual !== 'string') ||
+        !(segment in Object(actual))
+      ) {
+        actual = undefined
+        break
+      }
+      actual = (actual as Record<PropertyKey, unknown>)[segment]
+    }
+    const path =
+      issue.path
+        .map((segment) => {
+          const value = String(segment)
+          return /^[A-Za-z0-9_-]{1,64}$/.test(value) ? value : '[redacted]'
+        })
+        .join('.') || '(root)'
+    const expected =
+      issue.code === 'invalid_type'
+        ? issue.expected
+        : issue.code === 'unrecognized_keys'
+          ? 'no additional properties'
+          : issue.code
+    return { path, expected, actual: describeType(actual) }
+  })
 }
 
 function resolveUpstreamBase(env: Record<string, string | undefined>): URL | null {
@@ -135,8 +177,13 @@ export async function handleDashboardRequest(
   dependencies: GatewayDependencies = defaultDependencies,
 ) {
   let requestId = randomUUID() as string
-  const reply = (status: number, code: string, message: string, upstreamStatus?: number) =>
-    send(res, status, code, message, requestId, upstreamStatus)
+  const reply = (
+    status: number,
+    code: string,
+    message: string,
+    upstreamStatus?: number,
+    validationIssues?: Array<{ path: string; expected: string; actual: string }>,
+  ) => send(res, status, code, message, requestId, upstreamStatus, validationIssues)
   res.setHeader('Cache-Control', 'no-store')
   res.setHeader('X-Request-ID', requestId)
   if (req.method !== 'GET') {
@@ -343,6 +390,8 @@ export async function handleDashboardRequest(
         502,
         'UPSTREAM_CONTRACT_ERROR',
         'The middleware response did not match the dashboard contract.',
+        undefined,
+        validationDiagnostics(payload, parsed.error.issues),
       )
     if (definition.requestDetail) {
       const detail = parsed.data as { request: { requestId: string; documentType: string } }
